@@ -1,15 +1,10 @@
-# Imprint: Serialization Format for Incremental Data Manipulation
+# Imprint: Serialization Format for Row Data Manipulation
 
 Imprint is a binary row serialization format built for stream processing
 workloads, particularly those involving **incremental joins** and
 **denormalization** across heterogeneous data sources. It combines the
 flexibility of schemaless formats like JSON with the safety and performance of
 schema-aware formats like Avro or Protobuf.
-
-Imprint is optimized for a common pattern in stream processing: data is
-serialized once and deserialized many times. This format prioritizes
-(de)serialization speed and schema composability, even if that means accepting
-larger record sizes.
 
 ## Core Principles & Motivation
 
@@ -56,7 +51,7 @@ of each system is as it is:
 
 Take‑away: Imprint pays a few bytes per field to unlock deserialization-free joins,
 per‑field projection, and schema‑less tooling—capabilities that matter most
-in realtiem data manipulation topologies where each record may be routed,
+in realtime data manipulation topologies where each record may be routed,
 filtered, or merged dozens of times.
 
 ## Binary Format Structure
@@ -126,10 +121,9 @@ Each entry has the following format:
 
 | Field    | Encoding | Description                                        |
 |----------|----------|----------------------------------------------------|
-| `id`     | VarInt   | Uniquely assigned identifier within a fieldspace   |
+| `id`     | `u32`    | Uniquely assigned identifier within a fieldspace   |
 | `type`   | `u8`     | Field type identifier, see below                   | 
 | `offset` | `u32`    | Byte position of the value relative to the payload |
-| `length` | VarInt   | Length, only for variable-width types              |
 
 ### Payload Encoding
 
