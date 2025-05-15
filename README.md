@@ -1,4 +1,4 @@
-# Imprint: Serialization Format for Row Data Manipulation
+# Imprint: Serialization Format for Data Pipelines
 
 Imprint is a binary row serialization format built for stream processing
 workloads, particularly those involving **incremental joins** and

@@ -132,34 +132,35 @@ pub struct Header {
 /// An Imprint record containing a header, optional field directory, and payload
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImprintRecord {
-    pub header: Header,
-    pub directory: Vec<DirectoryEntry>,
-    pub payload: Bytes,
+    pub(crate) header: Header,
+    pub(crate) directory: Vec<DirectoryEntry>,
+    pub(crate) payload: Bytes,
 }
 
 impl ImprintRecord {
     /// Get a value by field ID, deserializing it on demand
     pub fn get_value(&self, field_id: u32) -> Result<Option<Value>, ImprintError> {
-        // TODO: directory should be a map instead of a vector
-        let entry = self.directory.iter().find(|e| e.id == field_id);
-        match entry {
-            Some(entry) => {
+        match self.directory.binary_search_by_key(&field_id, |e| e.id) {
+            Ok(idx) => {
+                let entry = &self.directory[idx];
                 let value_bytes = self.payload.slice(entry.offset as usize..);
                 let (value, _) = Value::read(entry.type_code, value_bytes)?;
                 Ok(Some(value))
             }
-            None => Ok(None),
+            Err(_) => Ok(None),
         }
     }
 
     /// Get the raw bytes for a field without deserializing
     pub fn get_raw_bytes(&self, field_id: u32) -> Option<Bytes> {
-        let entry = self.directory.iter().find(|e| e.id == field_id)?;
-        let start = entry.offset as usize;
-        let next_offset = self
+        let idx = self
             .directory
-            .iter()
-            .find(|e| e.id > field_id)
+            .binary_search_by_key(&field_id, |e| e.id)
+            .ok()?;
+        let entry = &self.directory[idx];
+        let start = entry.offset as usize;
+        let next_offset = self.directory[idx + 1..]
+            .first()
             .map(|e| e.offset as usize)
             .unwrap_or(self.payload.len());
         Some(self.payload.slice(start..next_offset))
