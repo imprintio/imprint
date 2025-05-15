@@ -72,6 +72,108 @@ impl Project for ImprintRecord {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MergeOptions {
+    /// If true, duplicate fields from the second record will be filtered out of the payload
+    /// If false, they will remain in the payload but won't be accessible via the directory
+    pub filter_duplicate_payloads: bool,
+}
+
+pub trait Merge {
+    /// Merge another record into this one, using default options.
+    /// By default, duplicate fields from the second record will be kept in the payload
+    /// but won't be accessible via the directory.
+    fn merge(&self, other: &ImprintRecord) -> Result<ImprintRecord, ImprintError> {
+        self.merge_with_opts(other, MergeOptions::default())
+    }
+
+    /// Merge another record into this one with specific options for handling duplicates.
+    fn merge_with_opts(
+        &self,
+        other: &ImprintRecord,
+        options: MergeOptions,
+    ) -> Result<ImprintRecord, ImprintError>;
+}
+
+impl Merge for ImprintRecord {
+    fn merge_with_opts(
+        &self,
+        other: &ImprintRecord,
+        options: MergeOptions,
+    ) -> Result<ImprintRecord, ImprintError> {
+        // we just shrink the directory and payload to the exact size we need at the end of the
+        // merge and allocate the largest possible sizes up front assuming that the records do
+        // not have significant overlaping fields
+        let mut new_directory = Vec::with_capacity(self.directory.len() + other.directory.len());
+        let mut new_payload = BytesMut::with_capacity(self.payload.len() + other.payload.len());
+
+        new_directory.extend_from_slice(&self.directory);
+        new_payload.extend_from_slice(&self.payload);
+
+        // Track field IDs from first record for deduplication
+        let first_field_ids: std::collections::HashSet<u32> =
+            self.directory.iter().map(|e| e.id).collect();
+
+        let base_offset = new_payload.len() as u32;
+
+        if options.filter_duplicate_payloads {
+            // If filtering duplicates, we need to process each field individually
+            let mut current_offset = 0u32;
+            for entry in &other.directory {
+                if first_field_ids.contains(&entry.id) {
+                    continue;
+                }
+
+                let field_bytes = other.get_raw_bytes(entry.id).unwrap();
+
+                // Add adjusted directory entry
+                let new_entry = DirectoryEntry {
+                    id: entry.id,
+                    type_code: entry.type_code,
+                    offset: base_offset + current_offset,
+                };
+                new_directory.push(new_entry);
+
+                // Copy corresponding payload
+                new_payload.extend_from_slice(field_bytes.as_ref());
+                current_offset += field_bytes.len() as u32;
+            }
+        } else {
+            // If not filtering duplicates, we can just append the entire payload
+            new_payload.extend_from_slice(&other.payload);
+
+            // Add all non-duplicate directory entries with adjusted offsets
+            for entry in &other.directory {
+                if !first_field_ids.contains(&entry.id) {
+                    let new_entry = DirectoryEntry {
+                        id: entry.id,
+                        type_code: entry.type_code,
+                        offset: base_offset + entry.offset,
+                    };
+                    new_directory.push(new_entry);
+                }
+            }
+        }
+
+        // Sort directory by field ID to maintain canonical form
+        new_directory.sort_by_key(|e| e.id);
+
+        // Shrink allocations to fit actual data
+        new_directory.shrink_to_fit();
+        let mut exact_payload = BytesMut::with_capacity(new_payload.len());
+        exact_payload.extend_from_slice(&new_payload);
+
+        Ok(ImprintRecord {
+            header: Header {
+                flags: self.header.flags,
+                schema_id: self.header.schema_id,
+            },
+            directory: new_directory,
+            payload: exact_payload.freeze(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,5 +399,117 @@ mod tests {
         // And the values should still be correct
         assert_eq!(projected.get_value(1).unwrap(), Some(Value::Int32(42)));
         assert_eq!(projected.get_value(3).unwrap(), Some(Value::Int64(123)));
+    }
+
+    #[test]
+    fn should_merge_records_with_distinct_fields() {
+        // Given two records with different fields
+        let mut writer1 = ImprintWriter::new(SchemaId {
+            fieldspace_id: 1,
+            schema_hash: 0xdeadbeef,
+        })
+        .unwrap();
+        writer1.add_field(1, Value::Int32(42)).unwrap();
+        writer1
+            .add_field(3, Value::String("hello".to_string()))
+            .unwrap();
+        let record1 = writer1.build().unwrap();
+
+        let mut writer2 = ImprintWriter::new(SchemaId {
+            fieldspace_id: 1,
+            schema_hash: 0xcafebabe,
+        })
+        .unwrap();
+        writer2.add_field(2, Value::Bool(true)).unwrap();
+        writer2.add_field(4, Value::Int64(123)).unwrap();
+        let record2 = writer2.build().unwrap();
+
+        // When merging the records
+        let merged = record1.merge(&record2).unwrap();
+
+        // Then all fields should be present
+        assert_eq!(merged.directory.len(), 4);
+        assert_eq!(merged.get_value(1).unwrap(), Some(Value::Int32(42)));
+        assert_eq!(merged.get_value(2).unwrap(), Some(Value::Bool(true)));
+        assert_eq!(
+            merged.get_value(3).unwrap(),
+            Some(Value::String("hello".to_string()))
+        );
+        assert_eq!(merged.get_value(4).unwrap(), Some(Value::Int64(123)));
+    }
+
+    #[test]
+    fn should_handle_duplicate_fields_keeping_first() {
+        // Given two records with overlapping fields
+        let mut writer1 = ImprintWriter::new(SchemaId {
+            fieldspace_id: 1,
+            schema_hash: 0xdeadbeef,
+        })
+        .unwrap();
+        writer1.add_field(1, Value::Int32(42)).unwrap();
+        writer1
+            .add_field(2, Value::String("first".to_string()))
+            .unwrap();
+        let record1 = writer1.build().unwrap();
+
+        let mut writer2 = ImprintWriter::new(SchemaId {
+            fieldspace_id: 1,
+            schema_hash: 0xcafebabe,
+        })
+        .unwrap();
+        writer2
+            .add_field(2, Value::String("second".to_string()))
+            .unwrap();
+        writer2.add_field(3, Value::Bool(true)).unwrap();
+        let record2 = writer2.build().unwrap();
+
+        // When merging with default options (keep zombie data)
+        let merged = record1.merge(&record2).unwrap();
+
+        // Then first occurrence of duplicate fields should be kept
+        assert_eq!(merged.directory.len(), 3);
+        assert_eq!(merged.get_value(1).unwrap(), Some(Value::Int32(42)));
+        assert_eq!(
+            merged.get_value(2).unwrap(),
+            Some(Value::String("first".to_string()))
+        );
+        assert_eq!(merged.get_value(3).unwrap(), Some(Value::Bool(true)));
+
+        // And payload should be larger due to zombie data
+        let filtered_merged = record1
+            .merge_with_opts(
+                &record2,
+                MergeOptions {
+                    filter_duplicate_payloads: true,
+                },
+            )
+            .unwrap();
+        assert!(merged.payload.len() > filtered_merged.payload.len());
+    }
+
+    #[test]
+    fn should_preserve_schema_id_from_first_record() {
+        // Given two records with different schema IDs
+        let schema1 = SchemaId {
+            fieldspace_id: 1,
+            schema_hash: 0xdeadbeef,
+        };
+        let mut writer1 = ImprintWriter::new(schema1).unwrap();
+        writer1.add_field(1, Value::Int32(42)).unwrap();
+        let record1 = writer1.build().unwrap();
+
+        let schema2 = SchemaId {
+            fieldspace_id: 1,
+            schema_hash: 0xcafebabe,
+        };
+        let mut writer2 = ImprintWriter::new(schema2).unwrap();
+        writer2.add_field(2, Value::Bool(true)).unwrap();
+        let record2 = writer2.build().unwrap();
+
+        // When merging the records
+        let merged = record1.merge(&record2).unwrap();
+
+        // Then schema ID from first record should be preserved
+        assert_eq!(merged.header.schema_id, schema1);
     }
 }
