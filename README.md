@@ -1,5 +1,7 @@
 # Imprint: Serialization Format for Data Pipelines
 
+<img src=".github/images/imprint-logo.png" alt="Imprint Logo" style="width: 60%; margin: auto;"/>
+
 Imprint is a binary row serialization format built for stream processing
 workloads, particularly those involving **incremental joins** and
 **denormalization** across heterogeneous data sources. It combines the
@@ -184,3 +186,13 @@ the directory entry for the first field. This means the order of composition
 matters as the payload in the second record will be ignored (or, optionally,
 the second payload can be modified to remove the discarded value to save 
 space).
+
+The results of benchmarking a basic merge use case when compared to protobuf
+improves linearly with the size of the records being merged. In a simple
+benchmark, Imprint performs up to 76% better than protobuf at merging two
+records.
+
+![Imprint v. Protobuf: Merging Records](.github/images/imprint-merge_bench.png)
+
+The source for the benchmarks are available in the `benches` directory of this
+repository.
