@@ -6,7 +6,7 @@ mod varint;
 mod writer;
 
 pub use error::ImprintError;
-pub use ops::{Merge, Project};
+pub use ops::{Merge, MergeOptions, Project};
 pub use serde::{Read, Write};
 pub use types::{
     DirectoryEntry, Flags, Header, ImprintRecord, MAGIC, SchemaId, TypeCode, VERSION, Value,

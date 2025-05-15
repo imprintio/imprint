@@ -1,0 +1,25 @@
+[package]
+name = "imprint-benchmarks"
+version = "0.1.0"
+edition = "2024"
+publish = false
+build = "build.rs"
+
+[dependencies]
+imprint = { path = ".." }
+criterion = { version = "0.5", features = ["html_reports"] }
+prost = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rand = "0.8"
+bytes = "1.5"
+fake = { version = "2.9", features = ["derive"] }
+uuid = { version = "1.7", features = ["v4"] }
+
+[build-dependencies]
+prost-build = "0.13.5"
+
+[[bench]]
+name = "serialization"
+path = "src/serialization.rs"
+harness = false 

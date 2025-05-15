@@ -110,17 +110,21 @@ impl Merge for ImprintRecord {
         new_directory.extend_from_slice(&self.directory);
         new_payload.extend_from_slice(&self.payload);
 
-        // Track field IDs from first record for deduplication
-        let first_field_ids: std::collections::HashSet<u32> =
-            self.directory.iter().map(|e| e.id).collect();
-
         let base_offset = new_payload.len() as u32;
 
         if options.filter_duplicate_payloads {
             // If filtering duplicates, we need to process each field individually
             let mut current_offset = 0u32;
+            let mut self_idx = 0;
+
             for entry in &other.directory {
-                if first_field_ids.contains(&entry.id) {
+                // Skip fields that exist in the first record by advancing the pointer
+                while self_idx < self.directory.len() && self.directory[self_idx].id < entry.id {
+                    self_idx += 1;
+                }
+
+                // If we found a match, skip this field
+                if self_idx < self.directory.len() && self.directory[self_idx].id == entry.id {
                     continue;
                 }
 
@@ -143,15 +147,25 @@ impl Merge for ImprintRecord {
             new_payload.extend_from_slice(&other.payload);
 
             // Add all non-duplicate directory entries with adjusted offsets
+            let mut self_idx = 0;
             for entry in &other.directory {
-                if !first_field_ids.contains(&entry.id) {
-                    let new_entry = DirectoryEntry {
-                        id: entry.id,
-                        type_code: entry.type_code,
-                        offset: base_offset + entry.offset,
-                    };
-                    new_directory.push(new_entry);
+                // Skip fields that exist in the first record by advancing the pointer -- don't
+                // use a set here since the performance degradation is significant
+                while self_idx < self.directory.len() && self.directory[self_idx].id < entry.id {
+                    self_idx += 1;
                 }
+
+                // If we found a match, skip this field
+                if self_idx < self.directory.len() && self.directory[self_idx].id == entry.id {
+                    continue;
+                }
+
+                let new_entry = DirectoryEntry {
+                    id: entry.id,
+                    type_code: entry.type_code,
+                    offset: base_offset + entry.offset,
+                };
+                new_directory.push(new_entry);
             }
         }
 
@@ -160,8 +174,6 @@ impl Merge for ImprintRecord {
 
         // Shrink allocations to fit actual data
         new_directory.shrink_to_fit();
-        let mut exact_payload = BytesMut::with_capacity(new_payload.len());
-        exact_payload.extend_from_slice(&new_payload);
 
         Ok(ImprintRecord {
             header: Header {
@@ -169,7 +181,7 @@ impl Merge for ImprintRecord {
                 schema_id: self.header.schema_id,
             },
             directory: new_directory,
-            payload: exact_payload.freeze(),
+            payload: new_payload.freeze(),
         })
     }
 }

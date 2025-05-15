@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package test;
+
+message Product {
+    string id = 1;
+    string name = 2;
+    string description = 3;
+    double price = 4;
+    int32 stock_quantity = 5;
+    string category = 6;
+    string brand = 7;
+    repeated string tags = 8;
+    bool is_active = 9;
+    string sku = 10;
+}
+
+message Order {
+    string id = 1;
+    string customer_id = 2;
+    string product_id = 3;
+    int32 quantity = 4;
+    repeated string tags = 5;
+}
+
+message EnrichedOrder {
+    Order order = 1;
+    Product product = 2;
+} 

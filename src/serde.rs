@@ -7,6 +7,10 @@ use crate::{
     varint,
 };
 
+const HEADER_BYTES: usize = 11;
+const DIR_COUNT_BYTES: usize = 5;
+const DIR_ENTRY_BYTES: usize = 9;
+
 /// A trait for types that can be written to a byte buffer
 pub trait Write {
     /// Write the value to the buffer in the Imprint format
@@ -309,6 +313,18 @@ impl Read for Header {
 
 impl Write for ImprintRecord {
     fn write(&self, buf: &mut BytesMut) -> Result<(), ImprintError> {
+        let header_size = HEADER_BYTES;
+        let dir_count_size = DIR_COUNT_BYTES;
+
+        let dir_entries_size = if self.header.flags.has_field_directory() {
+            self.directory.len() * DIR_ENTRY_BYTES
+        } else {
+            0
+        };
+
+        let payload_size = self.payload.len();
+        buf.reserve(header_size + dir_count_size + dir_entries_size + payload_size);
+
         self.header.write(buf)?;
 
         if self.header.flags.has_field_directory() {
