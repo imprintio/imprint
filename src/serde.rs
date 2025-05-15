@@ -363,6 +363,7 @@ impl Read for ImprintRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::writer::ImprintWriter;
     use proptest::prelude::*;
     use proptest::strategy::{BoxedStrategy, Strategy};
     use proptest::test_runner::TestRunner;
@@ -434,73 +435,29 @@ mod tests {
 
     #[test]
     fn test_roundtrip_nested_record() {
-        // Given an inner record with an int32 and string field
-        let inner_record = {
-            let header = Header {
-                flags: Flags::new(Flags::FIELD_DIRECTORY),
-                schema_id: SchemaId {
-                    fieldspace_id: 2,
-                    schema_hash: 0xcafebabe,
-                },
-            };
+        // Create an inner record with an int32 and string field
+        let mut inner_writer = ImprintWriter::new(SchemaId {
+            fieldspace_id: 2,
+            schema_hash: 0xcafebabe,
+        })
+        .unwrap();
+        inner_writer.add_field(1, Value::Int32(42)).unwrap();
+        inner_writer
+            .add_field(2, Value::String("nested".to_string()))
+            .unwrap();
+        let inner_record = inner_writer.build().unwrap();
 
-            let directory = vec![
-                DirectoryEntry {
-                    id: 1,
-                    type_code: TypeCode::Int32,
-                    offset: 0,
-                },
-                DirectoryEntry {
-                    id: 2,
-                    type_code: TypeCode::String,
-                    offset: 4, // Int32 takes 4 bytes
-                },
-            ];
-
-            let mut payload = BytesMut::new();
-            Value::Int32(42).write(&mut payload).unwrap();
-            Value::String("nested".to_string()).write(&mut payload).unwrap();
-
-            ImprintRecord {
-                header,
-                directory,
-                payload: payload.freeze(),
-            }
-        };
-
-        // And an outer record containing the inner record and an int64
-        let outer_record = {
-            let header = Header {
-                flags: Flags::new(Flags::FIELD_DIRECTORY),
-                schema_id: SchemaId {
-                    fieldspace_id: 1,
-                    schema_hash: 0xdeadbeef,
-                },
-            };
-
-            let mut payload = BytesMut::new();
-            Value::Row(Box::new(inner_record)).write(&mut payload).unwrap();
-            Value::Int64(123).write(&mut payload).unwrap();
-
-            let directory = vec![
-                DirectoryEntry {
-                    id: 1,
-                    type_code: TypeCode::Row,
-                    offset: 0,
-                },
-                DirectoryEntry {
-                    id: 2,
-                    type_code: TypeCode::Int64,
-                    offset: (payload.len() - 8) as u32, // Int64 takes 8 bytes from the end
-                },
-            ];
-
-            ImprintRecord {
-                header,
-                directory,
-                payload: payload.freeze(),
-            }
-        };
+        // Create an outer record containing the inner record and an int64
+        let mut outer_writer = ImprintWriter::new(SchemaId {
+            fieldspace_id: 1,
+            schema_hash: 0xdeadbeef,
+        })
+        .unwrap();
+        outer_writer
+            .add_field(1, Value::Row(Box::new(inner_record)))
+            .unwrap();
+        outer_writer.add_field(2, Value::Int64(123)).unwrap();
+        let outer_record = outer_writer.build().unwrap();
 
         // When we serialize and deserialize the outer record
         let mut buf = BytesMut::new();
@@ -547,110 +504,28 @@ mod tests {
             bytes_val in prop::collection::vec(any::<u8>(), 1..100).prop_map(Value::Bytes),
             string in any::<String>().prop_map(Value::String)
         ) {
-            // First write all values to a temporary buffer to calculate offsets
-            let mut temp_buf = BytesMut::new();
-            null.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
-            let null_offset = 0;
+            let mut writer = ImprintWriter::new(SchemaId {
+                fieldspace_id: 1,
+                schema_hash: 0xdeadbeef,
+            }).map_err(|e| TestCaseError::fail(e.to_string()))?;
 
-            boolean.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
-            let bool_offset = null_offset;
+            // Add all fields
+            writer.add_field(1, null.clone()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            writer.add_field(2, boolean.clone()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            writer.add_field(3, int32.clone()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            writer.add_field(4, int64.clone()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            writer.add_field(5, float32.clone()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            writer.add_field(6, float64.clone()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            writer.add_field(7, bytes_val.clone()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            writer.add_field(8, string.clone()).map_err(|e| TestCaseError::fail(e.to_string()))?;
 
-            int32.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
-            let int32_offset = bool_offset + 1; // bool takes 1 byte
-
-            int64.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
-            let int64_offset = int32_offset + 4; // int32 takes 4 bytes
-
-            float32.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
-            let float32_offset = int64_offset + 8; // int64 takes 8 bytes
-
-            float64.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
-            let float64_offset = float32_offset + 4; // float32 takes 4 bytes
-
-            let bytes_start = float64_offset + 8; // float64 takes 8 bytes
-            bytes_val.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
-            let bytes_offset = bytes_start;
-
-            let string_start = bytes_offset + match &bytes_val {
-                Value::Bytes(v) => {
-                    let mut temp = BytesMut::new();
-                    varint::encode(v.len() as u32, &mut temp);
-                    temp.len() + v.len()
-                },
-                _ => unreachable!(),
-            };
-            string.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
-            let string_offset = string_start;
-
-            // Now write the actual record
+            // Build and serialize
+            let record = writer.build().map_err(|e| TestCaseError::fail(e.to_string()))?;
             let mut buf = BytesMut::new();
+            record.write(&mut buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
 
-            // Write header
-            let header = Header {
-                flags: Flags::new(Flags::FIELD_DIRECTORY),
-                schema_id: SchemaId {
-                    fieldspace_id: 1,
-                    schema_hash: 0xdeadbeef,
-                },
-            };
-            header.write(&mut buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
-
-            // Write directory count (8 primitive fields)
-            varint::encode(8, &mut buf);
-
-            // Write directory entries with correct offsets
-            let entries = vec![
-                DirectoryEntry {
-                    id: 1,
-                    type_code: TypeCode::Null,
-                    offset: null_offset as u32,
-                },
-                DirectoryEntry {
-                    id: 2,
-                    type_code: TypeCode::Bool,
-                    offset: bool_offset as u32,
-                },
-                DirectoryEntry {
-                    id: 3,
-                    type_code: TypeCode::Int32,
-                    offset: int32_offset as u32,
-                },
-                DirectoryEntry {
-                    id: 4,
-                    type_code: TypeCode::Int64,
-                    offset: int64_offset as u32,
-                },
-                DirectoryEntry {
-                    id: 5,
-                    type_code: TypeCode::Float32,
-                    offset: float32_offset as u32,
-                },
-                DirectoryEntry {
-                    id: 6,
-                    type_code: TypeCode::Float64,
-                    offset: float64_offset as u32,
-                },
-                DirectoryEntry {
-                    id: 7,
-                    type_code: TypeCode::Bytes,
-                    offset: bytes_offset as u32,
-                },
-                DirectoryEntry {
-                    id: 8,
-                    type_code: TypeCode::String,
-                    offset: string_offset as u32,
-                },
-            ];
-            for entry in &entries {
-                entry.write(&mut buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
-            }
-
-            // Write the actual values
-            buf.extend_from_slice(&temp_buf);
-
-            // Then reading back the record should preserve all values
-            let bytes = buf.freeze();
-            let (record, _) = ImprintRecord::read(bytes).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            // Deserialize and verify
+            let (record, _) = ImprintRecord::read(buf.freeze()).map_err(|e| TestCaseError::fail(e.to_string()))?;
 
             // Verify metadata
             prop_assert_eq!(record.header.schema_id.fieldspace_id, 1);
@@ -712,14 +587,22 @@ mod tests {
                 .map_err(|e| TestCaseError::fail(e.to_string()))?
                 .current();
 
-            // And serializing and deserializing it
-            let mut buf = BytesMut::new();
-            array.write(&mut buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
-            let bytes = buf.freeze();
+            // Create a record with the array
+            let mut writer = ImprintWriter::new(SchemaId {
+                fieldspace_id: 1,
+                schema_hash: 0xdeadbeef,
+            }).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            writer.add_field(1, array.clone()).map_err(|e| TestCaseError::fail(e.to_string()))?;
 
-            // Then it should match the original
-            let (read_array, _) = Value::read(TypeCode::Array, bytes).map_err(|e| TestCaseError::fail(e.to_string()))?;
-            prop_assert_eq!(array, read_array);
+            // Build and serialize
+            let record = writer.build().map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let mut buf = BytesMut::new();
+            record.write(&mut buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+
+            // Deserialize and verify
+            let (record, _) = ImprintRecord::read(buf.freeze()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let got = record.get_value(1).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, Some(array));
         }
 
         #[test]
@@ -727,11 +610,14 @@ mod tests {
             // Given arrays of various sizes and types
             values in prop::collection::vec(arb_primitive_value(), 0..10)
         ) {
-            let mut buf = BytesMut::new();
+            let mut writer = ImprintWriter::new(SchemaId {
+                fieldspace_id: 1,
+                schema_hash: 0xdeadbeef,
+            }).map_err(|e| TestCaseError::fail(e.to_string()))?;
 
             // When creating an empty array
             let empty_array = Value::Array(vec![]);
-            let empty_result = empty_array.write(&mut buf);
+            let empty_result = writer.add_field(1, empty_array);
 
             // Then it should be rejected
             prop_assert!(empty_result.is_err());
@@ -745,7 +631,7 @@ mod tests {
                 let first_type = values[0].type_code();
                 if values.iter().any(|v| v.type_code() != first_type) {
                     let mixed_array = Value::Array(values);
-                    let mixed_result = mixed_array.write(&mut buf);
+                    let mixed_result = writer.add_field(1, mixed_array);
 
                     // Then it should be rejected
                     prop_assert!(mixed_result.is_err());
@@ -756,5 +642,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_duplicate_field_id() {
+        let mut writer = ImprintWriter::new(SchemaId {
+            fieldspace_id: 1,
+            schema_hash: 0xdeadbeef,
+        })
+        .unwrap();
+
+        // Add duplicate field IDs
+        writer.add_field(1, Value::Int32(42)).unwrap();
+        writer.add_field(1, Value::Int32(43)).unwrap();
+
+        // Build should succeed, last value wins
+        let record = writer.build().unwrap();
+        assert_eq!(record.directory.len(), 1);
+        assert_eq!(record.get_value(1).unwrap(), Some(Value::Int32(43)));
     }
 }

@@ -2,6 +2,7 @@ mod error;
 mod serde;
 mod types;
 mod varint;
+pub mod writer;
 
 pub use error::ImprintError;
 pub use serde::{Read, Write};
