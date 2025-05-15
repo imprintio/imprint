@@ -60,7 +60,7 @@ fn benchmark_deserialize(c: &mut Criterion) {
 
 fn benchmark_merge(c: &mut Criterion) {
     let mut group = c.benchmark_group("merge");
-    
+
     // Test different sizes
     for size in [1, 5, 10].iter() {
         let product = mock_data::mock_product(*size);
@@ -103,7 +103,7 @@ fn benchmark_merge(c: &mut Criterion) {
             })
         });
     }
-    
+
     group.finish();
 }
 
