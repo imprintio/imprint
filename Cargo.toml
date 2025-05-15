@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "benches"]
+
 [package]
 name = "imprint"
 version = "0.1.0"
