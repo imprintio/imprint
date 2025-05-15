@@ -6,8 +6,7 @@ mod varint;
 pub use error::ImprintError;
 pub use serde::{Read, Write};
 pub use types::{
-    DirectoryEntry, Flags, Header, ImprintRecord, SchemaId, TypeCode, Value,
-    MAGIC, VERSION,
+    DirectoryEntry, Flags, Header, ImprintRecord, MAGIC, SchemaId, TypeCode, VERSION, Value,
 };
 pub use varint::{decode as decode_varint, encode as encode_varint};
 

@@ -1,6 +1,6 @@
-use bytes::Bytes;
 use crate::error::ImprintError;
 use crate::serde::ValueRead;
+use bytes::Bytes;
 
 /// Magic byte that starts every Imprint record (ASCII 'I')
 pub const MAGIC: u8 = 0x49;
@@ -14,7 +14,7 @@ pub struct Flags(pub(crate) u8);
 impl Flags {
     /// Whether a field directory is present in the record
     pub const FIELD_DIRECTORY: u8 = 0x01;
-    
+
     pub fn new(flags: u8) -> Self {
         Self(flags)
     }
@@ -156,10 +156,12 @@ impl ImprintRecord {
     pub fn get_raw_bytes(&self, field_id: u32) -> Option<Bytes> {
         let entry = self.directory.iter().find(|e| e.id == field_id)?;
         let start = entry.offset as usize;
-        let next_offset = self.directory.iter()
+        let next_offset = self
+            .directory
+            .iter()
             .find(|e| e.id > field_id)
             .map(|e| e.offset as usize)
             .unwrap_or(self.payload.len());
         Some(self.payload.slice(start..next_offset))
     }
-} 
+}

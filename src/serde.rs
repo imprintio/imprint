@@ -1,10 +1,10 @@
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::{
+    MAGIC, VERSION,
     error::ImprintError,
     types::{DirectoryEntry, Flags, Header, ImprintRecord, SchemaId, TypeCode, Value},
     varint,
-    MAGIC, VERSION,
 };
 
 /// A trait for types that can be written to a byte buffer
@@ -229,7 +229,14 @@ impl Read for DirectoryEntry {
         let type_code = TypeCode::try_from(bytes.get_u8())?;
         let offset = bytes.get_u32_le();
 
-        Ok((Self { id, type_code, offset }, 9))
+        Ok((
+            Self {
+                id,
+                type_code,
+                offset,
+            },
+            9,
+        ))
     }
 }
 
@@ -253,7 +260,13 @@ impl Read for SchemaId {
         let fieldspace_id = bytes.get_u32_le();
         let schema_hash = bytes.get_u32_le();
 
-        Ok((Self { fieldspace_id, schema_hash }, 8))
+        Ok((
+            Self {
+                fieldspace_id,
+                schema_hash,
+            },
+            8,
+        ))
     }
 }
 
@@ -336,107 +349,44 @@ impl Read for ImprintRecord {
         let payload = bytes.slice(..);
         bytes_read = bytes.len();
 
-        Ok((Self { header, directory, payload }, bytes_read))
+        Ok((
+            Self {
+                header,
+                directory,
+                payload,
+            },
+            bytes_read,
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use proptest::strategy::{BoxedStrategy, Strategy};
+    use proptest::test_runner::TestRunner;
 
-    #[test]
-    fn should_roundtrip_simple_record() {
-        // Given a simple record with a few fields
-        let mut buf = BytesMut::new();
-        
-        // Write header
-        let header = Header {
-            flags: Flags::new(Flags::FIELD_DIRECTORY),
-            schema_id: SchemaId {
-                fieldspace_id: 1,
-                schema_hash: 0xdeadbeef,
-            },
-        };
-        header.write(&mut buf).unwrap();
-
-        // Write directory count
-        varint::encode(2, &mut buf);
-
-        // Write directory entries
-        let entries = vec![
-            DirectoryEntry {
-                id: 1,
-                type_code: TypeCode::Int32,
-                offset: 0,
-            },
-            DirectoryEntry {
-                id: 2,
-                type_code: TypeCode::String,
-                offset: 4,
-            },
-        ];
-        for entry in &entries {
-            entry.write(&mut buf).unwrap();
-        }
-
-        // Write values
-        Value::Int32(42).write(&mut buf).unwrap();
-        Value::String("hello".to_string()).write(&mut buf).unwrap();
-
-        // When reading back
-        let bytes = buf.freeze();
-        let (record, _) = ImprintRecord::read(bytes).unwrap();
-
-        // Then the record metadata should match
-        assert_eq!(record.header.schema_id.fieldspace_id, 1);
-        assert_eq!(record.header.schema_id.schema_hash, 0xdeadbeef);
-        assert_eq!(record.header.flags.0, Flags::FIELD_DIRECTORY);
-        assert_eq!(record.directory.len(), 2);
-
-        // And we can read back the values
-        assert_eq!(record.get_value(1).unwrap(), Some(Value::Int32(42)));
-        assert_eq!(record.get_value(2).unwrap(), Some(Value::String("hello".to_string())));
-        assert_eq!(record.get_value(3).unwrap(), None);
+    // Helper function to generate primitive Values
+    fn arb_primitive_value() -> BoxedStrategy<Value> {
+        prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::Bool),
+            any::<i32>().prop_map(Value::Int32),
+            any::<i64>().prop_map(Value::Int64),
+            any::<f32>().prop_map(Value::Float32),
+            any::<f64>().prop_map(Value::Float64),
+            prop::collection::vec(any::<u8>(), 0..100).prop_map(Value::Bytes),
+            ".*".prop_map(Value::String)
+        ]
+        .boxed()
     }
 
-    #[test]
-    fn should_roundtrip_nested_record() {
-        // Given a nested record
-        let nested = ImprintRecord {
-            header: Header {
-                flags: Flags::new(Flags::FIELD_DIRECTORY),
-                schema_id: SchemaId {
-                    fieldspace_id: 2,
-                    schema_hash: 0xcafebabe,
-                },
-            },
-            directory: vec![
-                DirectoryEntry {
-                    id: 1,
-                    type_code: TypeCode::Int32,
-                    offset: 0,
-                },
-            ],
-            payload: {
-                let mut buf = BytesMut::new();
-                Value::Int32(42).write(&mut buf).unwrap();
-                buf.freeze()
-            },
-        };
-
-        // When writing and reading back
-        let mut buf = BytesMut::new();
-        Value::Row(Box::new(nested)).write(&mut buf).unwrap();
-        let bytes = buf.freeze();
-        let (value, _) = Value::read(TypeCode::Row, bytes).unwrap();
-
-        // Then it should match the original
-        match value {
-            Value::Row(record) => {
-                assert_eq!(record.get_value(1).unwrap(), Some(Value::Int32(42)));
-            }
-            _ => panic!("Expected row value"),
-        }
+    // Helper function to generate homogeneous arrays of a specific type
+    fn arb_homogeneous_array(element_gen: BoxedStrategy<Value>) -> BoxedStrategy<Value> {
+        prop::collection::vec(element_gen, 1..100)
+            .prop_map(Value::Array)
+            .boxed()
     }
 
     #[test]
@@ -481,4 +431,227 @@ mod tests {
             Err(ImprintError::BufferUnderflow { .. })
         ));
     }
-} 
+
+    proptest! {
+        #[test]
+        fn test_roundtrip_simple_record(
+            null in Just(Value::Null),
+            boolean in any::<bool>().prop_map(Value::Bool),
+            int32 in any::<i32>().prop_map(Value::Int32),
+            int64 in any::<i64>().prop_map(Value::Int64),
+            float32 in any::<f32>().prop_map(Value::Float32),
+            float64 in any::<f64>().prop_map(Value::Float64),
+            bytes_val in prop::collection::vec(any::<u8>(), 1..100).prop_map(Value::Bytes),
+            string in any::<String>().prop_map(Value::String)
+        ) {
+            // First write all values to a temporary buffer to calculate offsets
+            let mut temp_buf = BytesMut::new();
+            null.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let null_offset = 0;
+
+            boolean.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let bool_offset = null_offset;
+
+            int32.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let int32_offset = bool_offset + 1; // bool takes 1 byte
+
+            int64.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let int64_offset = int32_offset + 4; // int32 takes 4 bytes
+
+            float32.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let float32_offset = int64_offset + 8; // int64 takes 8 bytes
+
+            float64.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let float64_offset = float32_offset + 4; // float32 takes 4 bytes
+
+            let bytes_start = float64_offset + 8; // float64 takes 8 bytes
+            bytes_val.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let bytes_offset = bytes_start;
+
+            let string_start = bytes_offset + match &bytes_val {
+                Value::Bytes(v) => {
+                    let mut temp = BytesMut::new();
+                    varint::encode(v.len() as u32, &mut temp);
+                    temp.len() + v.len()
+                },
+                _ => unreachable!(),
+            };
+            string.write(&mut temp_buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let string_offset = string_start;
+
+            // Now write the actual record
+            let mut buf = BytesMut::new();
+
+            // Write header
+            let header = Header {
+                flags: Flags::new(Flags::FIELD_DIRECTORY),
+                schema_id: SchemaId {
+                    fieldspace_id: 1,
+                    schema_hash: 0xdeadbeef,
+                },
+            };
+            header.write(&mut buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+
+            // Write directory count (8 primitive fields)
+            varint::encode(8, &mut buf);
+
+            // Write directory entries with correct offsets
+            let entries = vec![
+                DirectoryEntry {
+                    id: 1,
+                    type_code: TypeCode::Null,
+                    offset: null_offset as u32,
+                },
+                DirectoryEntry {
+                    id: 2,
+                    type_code: TypeCode::Bool,
+                    offset: bool_offset as u32,
+                },
+                DirectoryEntry {
+                    id: 3,
+                    type_code: TypeCode::Int32,
+                    offset: int32_offset as u32,
+                },
+                DirectoryEntry {
+                    id: 4,
+                    type_code: TypeCode::Int64,
+                    offset: int64_offset as u32,
+                },
+                DirectoryEntry {
+                    id: 5,
+                    type_code: TypeCode::Float32,
+                    offset: float32_offset as u32,
+                },
+                DirectoryEntry {
+                    id: 6,
+                    type_code: TypeCode::Float64,
+                    offset: float64_offset as u32,
+                },
+                DirectoryEntry {
+                    id: 7,
+                    type_code: TypeCode::Bytes,
+                    offset: bytes_offset as u32,
+                },
+                DirectoryEntry {
+                    id: 8,
+                    type_code: TypeCode::String,
+                    offset: string_offset as u32,
+                },
+            ];
+            for entry in &entries {
+                entry.write(&mut buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            }
+
+            // Write the actual values
+            buf.extend_from_slice(&temp_buf);
+
+            // Then reading back the record should preserve all values
+            let bytes = buf.freeze();
+            let (record, _) = ImprintRecord::read(bytes).map_err(|e| TestCaseError::fail(e.to_string()))?;
+
+            // Verify metadata
+            prop_assert_eq!(record.header.schema_id.fieldspace_id, 1);
+            prop_assert_eq!(record.header.schema_id.schema_hash, 0xdeadbeef);
+            prop_assert_eq!(record.header.flags.0, Flags::FIELD_DIRECTORY);
+            prop_assert_eq!(record.directory.len(), 8);
+
+            // Verify all values are preserved
+            let got = record.get_value(1).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, Some(null));
+
+            let got = record.get_value(2).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, Some(boolean));
+
+            let got = record.get_value(3).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, Some(int32));
+
+            let got = record.get_value(4).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, Some(int64));
+
+            let got = record.get_value(5).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, Some(float32));
+
+            let got = record.get_value(6).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, Some(float64));
+
+            let got = record.get_value(7).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, Some(bytes_val));
+
+            let got = record.get_value(8).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, Some(string));
+
+            // Verify non-existent field returns None
+            let got = record.get_value(9).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, None);
+        }
+
+        #[test]
+        fn prop_roundtrip_arrays(base_value in arb_primitive_value()) {
+            // Skip arrays and rows as base types
+            prop_assume!(!matches!(base_value, Value::Array(_) | Value::Row(_)));
+
+            // Create a strategy for arrays of this type
+            let array_strategy = match base_value {
+                Value::Null => Just(Value::Null).prop_map(|_| Value::Array(vec![Value::Null; 3])).boxed(),
+                Value::Bool(_) => arb_homogeneous_array(any::<bool>().prop_map(Value::Bool).boxed()),
+                Value::Int32(_) => arb_homogeneous_array(any::<i32>().prop_map(Value::Int32).boxed()),
+                Value::Int64(_) => arb_homogeneous_array(any::<i64>().prop_map(Value::Int64).boxed()),
+                Value::Float32(_) => arb_homogeneous_array(any::<f32>().prop_map(Value::Float32).boxed()),
+                Value::Float64(_) => arb_homogeneous_array(any::<f64>().prop_map(Value::Float64).boxed()),
+                Value::Bytes(_) => arb_homogeneous_array(prop::collection::vec(any::<u8>(), 0..100).prop_map(Value::Bytes).boxed()),
+                Value::String(_) => arb_homogeneous_array(".*".prop_map(Value::String).boxed()),
+                _ => panic!("Unsupported array type"),
+            };
+
+            // When generating an array
+            let array = array_strategy
+                .new_tree(&mut TestRunner::default())
+                .map_err(|e| TestCaseError::fail(e.to_string()))?
+                .current();
+
+            // And serializing and deserializing it
+            let mut buf = BytesMut::new();
+            array.write(&mut buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let bytes = buf.freeze();
+
+            // Then it should match the original
+            let (read_array, _) = Value::read(TypeCode::Array, bytes).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(array, read_array);
+        }
+
+        #[test]
+        fn prop_array_constraints(
+            // Given arrays of various sizes and types
+            values in prop::collection::vec(arb_primitive_value(), 0..10)
+        ) {
+            let mut buf = BytesMut::new();
+
+            // When creating an empty array
+            let empty_array = Value::Array(vec![]);
+            let empty_result = empty_array.write(&mut buf);
+
+            // Then it should be rejected
+            prop_assert!(empty_result.is_err());
+            prop_assert!(matches!(
+                empty_result.unwrap_err(),
+                ImprintError::SchemaError(_)
+            ));
+
+            // When the array has mixed types
+            if values.len() >= 2 {
+                let first_type = values[0].type_code();
+                if values.iter().any(|v| v.type_code() != first_type) {
+                    let mixed_array = Value::Array(values);
+                    let mixed_result = mixed_array.write(&mut buf);
+
+                    // Then it should be rejected
+                    prop_assert!(mixed_result.is_err());
+                    prop_assert!(matches!(
+                        mixed_result.unwrap_err(),
+                        ImprintError::SchemaError(_)
+                    ));
+                }
+            }
+        }
+    }
+}

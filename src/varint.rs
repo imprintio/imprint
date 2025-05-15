@@ -49,12 +49,12 @@ pub fn decode(mut bytes: Bytes) -> Result<(u32, usize), ImprintError> {
 
         // Add the bottom 7 bits to the result
         result |= segment << shift;
-        
+
         // If the high bit is not set, this is the last byte
         if byte & CONTINUATION_BIT == 0 {
             break;
         }
-        
+
         shift += 7;
     }
 
@@ -86,7 +86,7 @@ mod tests {
             // When encoding and then decoding the value
             let mut buf = BytesMut::new();
             encode(value, &mut buf);
-            
+
             let bytes = buf.freeze();
             let (decoded, _) = decode(bytes).unwrap();
 
@@ -130,7 +130,7 @@ mod tests {
         let mut buf = BytesMut::new();
         encode(16384, &mut buf);
         buf.truncate(buf.len() - 1);
-        
+
         // When decoding truncated input
         // Then it should return a buffer underflow error
         assert!(matches!(
@@ -140,16 +140,16 @@ mod tests {
 
         // Given an overlong encoding
         let buf = Bytes::from(vec![0x80, 0x80, 0x80, 0x80, 0x80, 0x01]);
-        
+
         // When decoding overlong input
         // Then it should return an invalid varint error
         assert!(matches!(decode(buf), Err(ImprintError::InvalidVarInt)));
 
         // Given a value that's too large
         let buf = Bytes::from(vec![0x80, 0x80, 0x80, 0x80, 0x10]);
-        
+
         // When decoding the too-large value
         // Then it should return an invalid varint error
         assert!(matches!(decode(buf), Err(ImprintError::InvalidVarInt)));
     }
-} 
+}

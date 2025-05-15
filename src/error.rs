@@ -21,14 +21,11 @@ pub enum ImprintError {
     InvalidUtf8String,
 
     #[error("buffer underflow: needed {needed} bytes, had {available}")]
-    BufferUnderflow {
-        needed: usize,
-        available: usize,
-    },
+    BufferUnderflow { needed: usize, available: usize },
 
     #[error("schema error: {0}")]
     SchemaError(String),
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
-} 
+}
