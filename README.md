@@ -114,9 +114,9 @@ makes hashing and deduplication cheap.
 Each entry has the following format:
 
 ```
-+------------------------------+
-| id | type | offset | length? |
-+------------------------------+
++--------------------+
+| id | type | offset |
++--------------------+
 ```
 
 | Field    | Encoding | Description                                        |
