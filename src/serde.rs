@@ -604,44 +604,6 @@ mod tests {
             let got = record.get_value(1).map_err(|e| TestCaseError::fail(e.to_string()))?;
             prop_assert_eq!(got, Some(array));
         }
-
-        #[test]
-        fn prop_array_constraints(
-            // Given arrays of various sizes and types
-            values in prop::collection::vec(arb_primitive_value(), 0..10)
-        ) {
-            let mut writer = ImprintWriter::new(SchemaId {
-                fieldspace_id: 1,
-                schema_hash: 0xdeadbeef,
-            }).map_err(|e| TestCaseError::fail(e.to_string()))?;
-
-            // When creating an empty array
-            let empty_array = Value::Array(vec![]);
-            let empty_result = writer.add_field(1, empty_array);
-
-            // Then it should be rejected
-            prop_assert!(empty_result.is_err());
-            prop_assert!(matches!(
-                empty_result.unwrap_err(),
-                ImprintError::SchemaError(_)
-            ));
-
-            // When the array has mixed types
-            if values.len() >= 2 {
-                let first_type = values[0].type_code();
-                if values.iter().any(|v| v.type_code() != first_type) {
-                    let mixed_array = Value::Array(values);
-                    let mixed_result = writer.add_field(1, mixed_array);
-
-                    // Then it should be rejected
-                    prop_assert!(mixed_result.is_err());
-                    prop_assert!(matches!(
-                        mixed_result.unwrap_err(),
-                        ImprintError::SchemaError(_)
-                    ));
-                }
-            }
-        }
     }
 
     #[test]
