@@ -169,11 +169,10 @@ for field in fields:
 
 ### Composition (Join / Merge)
 
-Merging two Imprint rows with compatible schemas (there are no fields
-with the same name and different types) can be done by concatenating 
-the field directories and the payloads, modifying the directory for
-trailing messages by incrementing the offset by the length of the 
-payload of A:
+Merging two Imprint rows with compatible schemas (there are no fields with the
+same name and different types) can be done by sort-merging the field directories
+and conatenating the payloads, modifying the directory for trailing messages by
+incrementing the offset by the length of the payload of A:
 
 ```
 new_payload = A.payload || B.payload
