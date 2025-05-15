@@ -432,6 +432,109 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn test_roundtrip_nested_record() {
+        // Given an inner record with an int32 and string field
+        let inner_record = {
+            let header = Header {
+                flags: Flags::new(Flags::FIELD_DIRECTORY),
+                schema_id: SchemaId {
+                    fieldspace_id: 2,
+                    schema_hash: 0xcafebabe,
+                },
+            };
+
+            let directory = vec![
+                DirectoryEntry {
+                    id: 1,
+                    type_code: TypeCode::Int32,
+                    offset: 0,
+                },
+                DirectoryEntry {
+                    id: 2,
+                    type_code: TypeCode::String,
+                    offset: 4, // Int32 takes 4 bytes
+                },
+            ];
+
+            let mut payload = BytesMut::new();
+            Value::Int32(42).write(&mut payload).unwrap();
+            Value::String("nested".to_string()).write(&mut payload).unwrap();
+
+            ImprintRecord {
+                header,
+                directory,
+                payload: payload.freeze(),
+            }
+        };
+
+        // And an outer record containing the inner record and an int64
+        let outer_record = {
+            let header = Header {
+                flags: Flags::new(Flags::FIELD_DIRECTORY),
+                schema_id: SchemaId {
+                    fieldspace_id: 1,
+                    schema_hash: 0xdeadbeef,
+                },
+            };
+
+            let mut payload = BytesMut::new();
+            Value::Row(Box::new(inner_record)).write(&mut payload).unwrap();
+            Value::Int64(123).write(&mut payload).unwrap();
+
+            let directory = vec![
+                DirectoryEntry {
+                    id: 1,
+                    type_code: TypeCode::Row,
+                    offset: 0,
+                },
+                DirectoryEntry {
+                    id: 2,
+                    type_code: TypeCode::Int64,
+                    offset: (payload.len() - 8) as u32, // Int64 takes 8 bytes from the end
+                },
+            ];
+
+            ImprintRecord {
+                header,
+                directory,
+                payload: payload.freeze(),
+            }
+        };
+
+        // When we serialize and deserialize the outer record
+        let mut buf = BytesMut::new();
+        outer_record.write(&mut buf).unwrap();
+        let (deserialized_record, _) = ImprintRecord::read(buf.freeze()).unwrap();
+
+        // Then the outer record metadata should be preserved
+        assert_eq!(deserialized_record.header.schema_id.fieldspace_id, 1);
+        assert_eq!(deserialized_record.header.schema_id.schema_hash, 0xdeadbeef);
+        assert_eq!(deserialized_record.header.flags.0, Flags::FIELD_DIRECTORY);
+        assert_eq!(deserialized_record.directory.len(), 2);
+
+        // And the outer record values should match
+        let got_row = deserialized_record.get_value(1).unwrap().unwrap();
+        let got_int64 = deserialized_record.get_value(2).unwrap().unwrap();
+        assert_eq!(got_int64, Value::Int64(123));
+
+        // And the inner record should be preserved
+        if let Value::Row(inner) = got_row {
+            assert_eq!(inner.header.schema_id.fieldspace_id, 2);
+            assert_eq!(inner.header.schema_id.schema_hash, 0xcafebabe);
+            assert_eq!(inner.header.flags.0, Flags::FIELD_DIRECTORY);
+            assert_eq!(inner.directory.len(), 2);
+
+            let got_inner_int = inner.get_value(1).unwrap().unwrap();
+            let got_inner_str = inner.get_value(2).unwrap().unwrap();
+
+            assert_eq!(got_inner_int, Value::Int32(42));
+            assert_eq!(got_inner_str, Value::String("nested".to_string()));
+        } else {
+            panic!("Expected Row value");
+        }
+    }
+
     proptest! {
         #[test]
         fn test_roundtrip_simple_record(
