@@ -153,7 +153,10 @@ impl ImprintRecord {
 
     /// Get the raw bytes for a field without deserializing
     pub fn get_raw_bytes(&self, field_id: u32) -> Option<Bytes> {
-        let idx = self.directory.binary_search_by_key(&field_id, |e| e.id).ok()?;
+        let idx = self
+            .directory
+            .binary_search_by_key(&field_id, |e| e.id)
+            .ok()?;
         let entry = &self.directory[idx];
         let start = entry.offset as usize;
         let next_offset = self.directory[idx + 1..]
