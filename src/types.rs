@@ -101,6 +101,65 @@ impl Value {
             Self::Row(_) => TypeCode::Row,
         }
     }
+
+    /// Try to interpret this Value as a valid MapKey.
+    pub fn as_map_key(self) -> Result<MapKey, ImprintError> {
+        MapKey::try_from(self)
+    }
+}
+
+impl From<MapKey> for Value {
+    fn from(key: MapKey) -> Value {
+        match key {
+            MapKey::Int32(i) => Value::Int32(i),
+            MapKey::Int64(i) => Value::Int64(i),
+            MapKey::Bytes(b) => Value::Bytes(b),
+            MapKey::String(s) => Value::String(s),
+        }
+    }
+}
+
+/// Lets you do `Value::... == MapKey::...`
+impl PartialEq<MapKey> for Value {
+    fn eq(&self, other: &MapKey) -> bool {
+        other == self
+    }
+}
+
+/// A subset of `Value` that’s valid as a map key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MapKey {
+    Int32(i32),
+    Int64(i64),
+    Bytes(Vec<u8>),
+    String(String),
+}
+
+impl TryFrom<Value> for MapKey {
+    type Error = ImprintError;
+
+    fn try_from(v: Value) -> Result<Self, ImprintError> {
+        match v {
+            Value::Int32(i) => Ok(MapKey::Int32(i)),
+            Value::Int64(i) => Ok(MapKey::Int64(i)),
+            Value::Bytes(b) => Ok(MapKey::Bytes(b)),
+            Value::String(s) => Ok(MapKey::String(s)),
+            other => Err(ImprintError::InvalidFieldType(other.type_code() as u8)),
+        }
+    }
+}
+
+/// Allow `MapKey::... == Value::...
+impl PartialEq<Value> for MapKey {
+    fn eq(&self, other: &Value) -> bool {
+        match (self, other) {
+            (MapKey::Int32(a), Value::Int32(b)) => a == b,
+            (MapKey::Int64(a), Value::Int64(b)) => a == b,
+            (MapKey::Bytes(a), Value::Bytes(b)) => a == b,
+            (MapKey::String(a), Value::String(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 /// A directory entry describing a single field in an Imprint record.
@@ -164,5 +223,20 @@ impl ImprintRecord {
             .map(|e| e.offset as usize)
             .unwrap_or(self.payload.len());
         Some(self.payload.slice(start..next_offset))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_map_key_eq_value() {
+        assert!(MapKey::Int32(1) == Value::Int32(1));
+    }
+
+    #[test]
+    fn test_value_eq_map_key() {
+        assert!(Value::String("foo".into()) == MapKey::String("foo".into()));
     }
 }
