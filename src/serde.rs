@@ -7,7 +7,7 @@ use crate::{
     varint,
 };
 
-const HEADER_BYTES: usize = 11;
+const HEADER_BYTES: usize = 15;
 const DIR_COUNT_BYTES: usize = 5;
 const DIR_ENTRY_BYTES: usize = 9;
 
@@ -65,12 +65,13 @@ impl Write for Value {
                 Ok(())
             }
             Self::Array(v) => {
+                varint::encode(v.len() as u32, buf);
                 if v.is_empty() {
-                    return Err(ImprintError::SchemaError("empty array not allowed".into()));
+                    return Ok(());
                 }
+
                 let type_code = v[0].type_code();
                 buf.put_u8(type_code as u8);
-                varint::encode(v.len() as u32, buf);
                 for value in v {
                     if value.type_code() != type_code {
                         return Err(ImprintError::SchemaError(
@@ -185,12 +186,16 @@ impl ValueRead for Value {
                 s.into()
             }
             TypeCode::Array => {
-                let element_type = TypeCode::try_from(bytes.get_u8())?;
-                bytes_read += 1;
-
                 let (len, len_size) = varint::decode(bytes.clone())?;
                 bytes.advance(len_size);
                 bytes_read += len_size;
+
+                if len == 0 {
+                    return Ok((Value::Array(vec![]), bytes_read));
+                }
+
+                let element_type = TypeCode::try_from(bytes.get_u8())?;
+                bytes_read += 1;
 
                 let mut values = Vec::with_capacity(len as usize);
                 for _ in 0..len {
@@ -280,15 +285,16 @@ impl Write for Header {
         buf.put_u8(VERSION);
         buf.put_u8(self.flags.0);
         self.schema_id.write(buf)?;
+        buf.put_u32_le(self.payload_size);
         Ok(())
     }
 }
 
 impl Read for Header {
     fn read(mut bytes: Bytes) -> Result<(Self, usize), ImprintError> {
-        if bytes.remaining() < 11 {
+        if bytes.remaining() < HEADER_BYTES {
             return Err(ImprintError::BufferUnderflow {
-                needed: 11,
+                needed: HEADER_BYTES,
                 available: bytes.remaining(),
             });
         }
@@ -307,7 +313,16 @@ impl Read for Header {
         let (schema_id, _) = SchemaId::read(bytes.clone())?;
         bytes.advance(8);
 
-        Ok((Self { flags, schema_id }, 11))
+        let payload_size = bytes.get_u32_le();
+
+        Ok((
+            Self {
+                flags,
+                schema_id,
+                payload_size,
+            },
+            HEADER_BYTES,
+        ))
     }
 }
 
@@ -362,8 +377,9 @@ impl Read for ImprintRecord {
             }
         }
 
-        let payload = bytes.slice(..);
-        bytes_read = bytes.len();
+        let payload = bytes.slice(..header.payload_size as usize);
+        bytes.advance(header.payload_size as usize);
+        bytes_read += header.payload_size as usize;
 
         Ok((
             Self {
@@ -401,9 +417,33 @@ mod tests {
 
     // Helper function to generate homogeneous arrays of a specific type
     fn arb_homogeneous_array(element_gen: BoxedStrategy<Value>) -> BoxedStrategy<Value> {
-        prop::collection::vec(element_gen, 1..100)
+        prop::collection::vec(element_gen, 0..100)
             .prop_map(Value::Array)
             .boxed()
+    }
+
+    // Helper function to generate a row with a single field
+    fn arb_simple_row() -> BoxedStrategy<Value> {
+        arb_primitive_value()
+            .prop_map(|value| {
+                let mut writer = ImprintWriter::new(SchemaId {
+                    fieldspace_id: 1,
+                    schema_hash: 0xdeadbeef,
+                })
+                .unwrap();
+                writer.add_field(1, value).unwrap();
+                Value::Row(Box::new(writer.build().unwrap()))
+            })
+            .boxed()
+    }
+
+    fn arb_value() -> BoxedStrategy<Value> {
+        prop_oneof![
+            arb_primitive_value(),
+            arb_homogeneous_array(any::<i32>().prop_map(Value::Int32).boxed()),
+            arb_simple_row()
+        ]
+        .boxed()
     }
 
     #[test]
@@ -414,6 +454,7 @@ mod tests {
         buf.put_u8(VERSION);
         buf.put_u8(0x00);
         buf.put_u64_le(0);
+        buf.put_u32_le(0);
 
         // When trying to read
         // Then it should return an invalid magic error
@@ -428,6 +469,7 @@ mod tests {
         buf.put_u8(0xFF); // Wrong version
         buf.put_u8(0x00);
         buf.put_u64_le(0);
+        buf.put_u32_le(0);
 
         // When trying to read
         // Then it should return an unsupported version error
@@ -576,10 +618,7 @@ mod tests {
         }
 
         #[test]
-        fn prop_roundtrip_arrays(base_value in arb_primitive_value()) {
-            // Skip arrays and rows as base types
-            prop_assume!(!matches!(base_value, Value::Array(_) | Value::Row(_)));
-
+        fn prop_roundtrip_arrays(base_value in arb_value()) {
             // Create a strategy for arrays of this type
             let array_strategy = match base_value {
                 Value::Null => Just(vec![Value::Null; 3].into()).boxed(),
@@ -590,7 +629,8 @@ mod tests {
                 Value::Float64(_) => arb_homogeneous_array(any::<f64>().prop_map(Value::Float64).boxed()),
                 Value::Bytes(_) => arb_homogeneous_array(prop::collection::vec(any::<u8>(), 0..100).prop_map(Value::Bytes).boxed()),
                 Value::String(_) => arb_homogeneous_array(".*".prop_map(Value::String).boxed()),
-                _ => panic!("Unsupported array type"),
+                Value::Array(_) => arb_homogeneous_array(prop::collection::vec(any::<i32>().prop_map(Value::Int32), 0..100).prop_map(Value::Array).boxed()),
+                Value::Row(_) => arb_homogeneous_array(arb_simple_row().boxed()),
             };
 
             // When generating an array
