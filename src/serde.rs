@@ -102,8 +102,8 @@ impl ValueRead for Value {
                 let v = bytes.get_u8();
                 bytes_read += 1;
                 match v {
-                    0 => Value::Bool(false),
-                    1 => Value::Bool(true),
+                    0 => false.into(),
+                    1 => true.into(),
                     _ => return Err(ImprintError::SchemaError("invalid boolean value".into())),
                 }
             }
@@ -116,7 +116,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_i32_le();
                 bytes_read += 4;
-                Value::Int32(v)
+                v.into()
             }
             TypeCode::Int64 => {
                 if bytes.remaining() < 8 {
@@ -127,7 +127,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_i64_le();
                 bytes_read += 8;
-                Value::Int64(v)
+                v.into()
             }
             TypeCode::Float32 => {
                 if bytes.remaining() < 4 {
@@ -138,7 +138,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_f32_le();
                 bytes_read += 4;
-                Value::Float32(v)
+                v.into()
             }
             TypeCode::Float64 => {
                 if bytes.remaining() < 8 {
@@ -149,7 +149,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_f64_le();
                 bytes_read += 8;
-                Value::Float64(v)
+                v.into()
             }
             TypeCode::Bytes => {
                 let (len, len_size) = varint::decode(bytes.clone())?;
@@ -165,7 +165,7 @@ impl ValueRead for Value {
                 let mut v = vec![0; len as usize];
                 bytes.copy_to_slice(&mut v);
                 bytes_read += len as usize;
-                Value::Bytes(v)
+                v.into()
             }
             TypeCode::String => {
                 let (len, len_size) = varint::decode(bytes.clone())?;
@@ -182,7 +182,7 @@ impl ValueRead for Value {
                 bytes.copy_to_slice(&mut v);
                 bytes_read += len as usize;
                 let s = String::from_utf8(v).map_err(|_| ImprintError::InvalidUtf8String)?;
-                Value::String(s)
+                s.into()
             }
             TypeCode::Array => {
                 let element_type = TypeCode::try_from(bytes.get_u8())?;
@@ -199,12 +199,12 @@ impl ValueRead for Value {
                     bytes_read += value_size;
                     values.push(value);
                 }
-                Value::Array(values)
+                values.into()
             }
             TypeCode::Row => {
                 let (record, size) = ImprintRecord::read(bytes)?;
                 bytes_read += size;
-                Value::Row(Box::new(record))
+                record.into()
             }
         };
         Ok((value, bytes_read))
@@ -457,10 +457,8 @@ mod tests {
             schema_hash: 0xcafebabe,
         })
         .unwrap();
-        inner_writer.add_field(1, Value::Int32(42)).unwrap();
-        inner_writer
-            .add_field(2, Value::String("nested".to_string()))
-            .unwrap();
+        inner_writer.add_field(1, 42.into()).unwrap();
+        inner_writer.add_field(2, "nested".into()).unwrap();
         let inner_record = inner_writer.build().unwrap();
 
         // Create an outer record containing the inner record and an int64
@@ -469,10 +467,8 @@ mod tests {
             schema_hash: 0xdeadbeef,
         })
         .unwrap();
-        outer_writer
-            .add_field(1, Value::Row(Box::new(inner_record)))
-            .unwrap();
-        outer_writer.add_field(2, Value::Int64(123)).unwrap();
+        outer_writer.add_field(1, inner_record.into()).unwrap();
+        outer_writer.add_field(2, 123i64.into()).unwrap();
         let outer_record = outer_writer.build().unwrap();
 
         // When we serialize and deserialize the outer record
@@ -586,7 +582,7 @@ mod tests {
 
             // Create a strategy for arrays of this type
             let array_strategy = match base_value {
-                Value::Null => Just(Value::Null).prop_map(|_| Value::Array(vec![Value::Null; 3])).boxed(),
+                Value::Null => Just(vec![Value::Null; 3].into()).boxed(),
                 Value::Bool(_) => arb_homogeneous_array(any::<bool>().prop_map(Value::Bool).boxed()),
                 Value::Int32(_) => arb_homogeneous_array(any::<i32>().prop_map(Value::Int32).boxed()),
                 Value::Int64(_) => arb_homogeneous_array(any::<i64>().prop_map(Value::Int64).boxed()),
@@ -631,12 +627,12 @@ mod tests {
         .unwrap();
 
         // Add duplicate field IDs
-        writer.add_field(1, Value::Int32(42)).unwrap();
-        writer.add_field(1, Value::Int32(43)).unwrap();
+        writer.add_field(1, 42.into()).unwrap();
+        writer.add_field(1, 43.into()).unwrap();
 
         // Build should succeed, last value wins
         let record = writer.build().unwrap();
         assert_eq!(record.directory.len(), 1);
-        assert_eq!(record.get_value(1).unwrap(), Some(Value::Int32(43)));
+        assert_eq!(record.get_value(1).unwrap(), Some(43.into()));
     }
 }

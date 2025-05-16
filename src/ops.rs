@@ -190,7 +190,7 @@ impl Merge for ImprintRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ImprintWriter, Value};
+    use crate::{ImprintWriter};
 
     fn create_test_record() -> ImprintRecord {
         let mut writer = ImprintWriter::new(SchemaId {
@@ -199,12 +199,10 @@ mod tests {
         })
         .unwrap();
 
-        writer.add_field(1, Value::Int32(42)).unwrap();
-        writer
-            .add_field(3, Value::String("hello".to_string()))
-            .unwrap();
-        writer.add_field(5, Value::Bool(true)).unwrap();
-        writer.add_field(7, Value::Bytes(vec![1, 2, 3])).unwrap();
+        writer.add_field(1, 42.into()).unwrap();
+        writer.add_field(3, "hello".into()).unwrap();
+        writer.add_field(5, true.into()).unwrap();
+        writer.add_field(7, vec![1, 2, 3].into()).unwrap();
 
         writer.build().unwrap()
     }
@@ -219,8 +217,8 @@ mod tests {
 
         // Then only the requested fields should be present
         assert_eq!(projected.directory.len(), 2);
-        assert_eq!(projected.get_value(1).unwrap(), Some(Value::Int32(42)));
-        assert_eq!(projected.get_value(5).unwrap(), Some(Value::Bool(true)));
+        assert_eq!(projected.get_value(1).unwrap(), Some(42.into()));
+        assert_eq!(projected.get_value(5).unwrap(), Some(true.into()));
 
         // And non-requested fields should be absent
         assert_eq!(projected.get_value(3).unwrap(), None);
@@ -237,16 +235,10 @@ mod tests {
 
         // Then all requested fields should be present with correct values
         assert_eq!(projected.directory.len(), 4);
-        assert_eq!(projected.get_value(1).unwrap(), Some(Value::Int32(42)));
-        assert_eq!(
-            projected.get_value(3).unwrap(),
-            Some(Value::String("hello".to_string()))
-        );
-        assert_eq!(projected.get_value(5).unwrap(), Some(Value::Bool(true)));
-        assert_eq!(
-            projected.get_value(7).unwrap(),
-            Some(Value::Bytes(vec![1, 2, 3]))
-        );
+        assert_eq!(projected.get_value(1).unwrap(), Some(42.into()));
+        assert_eq!(projected.get_value(3).unwrap(), Some("hello".into()));
+        assert_eq!(projected.get_value(5).unwrap(), Some(true.into()));
+        assert_eq!(projected.get_value(7).unwrap(), Some(vec![1, 2, 3].into()));
 
         // And directory should maintain sorted order
         let dir_ids: Vec<u32> = projected.directory.iter().map(|e| e.id).collect();
@@ -266,10 +258,7 @@ mod tests {
 
         // Then only that field should be present
         assert_eq!(projected.directory.len(), 1);
-        assert_eq!(
-            projected.get_value(3).unwrap(),
-            Some(Value::String("hello".to_string()))
-        );
+        assert_eq!(projected.get_value(3).unwrap(), Some("hello".into()));
     }
 
     #[test]
@@ -316,7 +305,7 @@ mod tests {
 
         // Then only existing fields should be included
         assert_eq!(projected.directory.len(), 1);
-        assert_eq!(projected.get_value(1).unwrap(), Some(Value::Int32(42)));
+        assert_eq!(projected.get_value(1).unwrap(), Some(42.into()));
         assert_eq!(projected.get_value(99).unwrap(), None);
         assert_eq!(projected.get_value(100).unwrap(), None);
     }
@@ -331,7 +320,7 @@ mod tests {
 
         // Then field should only appear once
         assert_eq!(projected.directory.len(), 1);
-        assert_eq!(projected.get_value(1).unwrap(), Some(Value::Int32(42)));
+        assert_eq!(projected.get_value(1).unwrap(), Some(42.into()));
     }
 
     #[test]
@@ -379,12 +368,10 @@ mod tests {
         .unwrap();
 
         // Add a mix of small and large fields
-        writer.add_field(1, Value::Int32(42)).unwrap(); // 4 bytes
-        writer
-            .add_field(2, Value::String("a".repeat(1000)))
-            .unwrap(); // ~1000 bytes
-        writer.add_field(3, Value::Int64(123)).unwrap(); // 8 bytes
-        writer.add_field(4, Value::Bytes(vec![0; 500])).unwrap(); // 500 bytes
+        writer.add_field(1, 42.into()).unwrap(); // 4 bytes
+        writer.add_field(2, "a".repeat(1000).into()).unwrap(); // ~1000 bytes
+        writer.add_field(3, 123i64.into()).unwrap(); // 8 bytes
+        writer.add_field(4, vec![0; 500].into()).unwrap(); // 500 bytes
         let record = writer.build().unwrap();
 
         let original_payload_size = record.payload.len();
@@ -410,8 +397,8 @@ mod tests {
         );
 
         // And the values should still be correct
-        assert_eq!(projected.get_value(1).unwrap(), Some(Value::Int32(42)));
-        assert_eq!(projected.get_value(3).unwrap(), Some(Value::Int64(123)));
+        assert_eq!(projected.get_value(1).unwrap(), Some(42.into()));
+        assert_eq!(projected.get_value(3).unwrap(), Some(123i64.into()));
     }
 
     #[test]
@@ -422,10 +409,8 @@ mod tests {
             schema_hash: 0xdeadbeef,
         })
         .unwrap();
-        writer1.add_field(1, Value::Int32(42)).unwrap();
-        writer1
-            .add_field(3, Value::String("hello".to_string()))
-            .unwrap();
+        writer1.add_field(1, 42.into()).unwrap();
+        writer1.add_field(3, "hello".into()).unwrap();
         let record1 = writer1.build().unwrap();
 
         let mut writer2 = ImprintWriter::new(SchemaId {
@@ -433,8 +418,8 @@ mod tests {
             schema_hash: 0xcafebabe,
         })
         .unwrap();
-        writer2.add_field(2, Value::Bool(true)).unwrap();
-        writer2.add_field(4, Value::Int64(123)).unwrap();
+        writer2.add_field(2, true.into()).unwrap();
+        writer2.add_field(4, 123i64.into()).unwrap();
         let record2 = writer2.build().unwrap();
 
         // When merging the records
@@ -442,13 +427,10 @@ mod tests {
 
         // Then all fields should be present
         assert_eq!(merged.directory.len(), 4);
-        assert_eq!(merged.get_value(1).unwrap(), Some(Value::Int32(42)));
-        assert_eq!(merged.get_value(2).unwrap(), Some(Value::Bool(true)));
-        assert_eq!(
-            merged.get_value(3).unwrap(),
-            Some(Value::String("hello".to_string()))
-        );
-        assert_eq!(merged.get_value(4).unwrap(), Some(Value::Int64(123)));
+        assert_eq!(merged.get_value(1).unwrap(), Some(42.into()));
+        assert_eq!(merged.get_value(2).unwrap(), Some(true.into()));
+        assert_eq!(merged.get_value(3).unwrap(), Some("hello".into()));
+        assert_eq!(merged.get_value(4).unwrap(), Some(123i64.into()));
     }
 
     #[test]
@@ -459,10 +441,8 @@ mod tests {
             schema_hash: 0xdeadbeef,
         })
         .unwrap();
-        writer1.add_field(1, Value::Int32(42)).unwrap();
-        writer1
-            .add_field(2, Value::String("first".to_string()))
-            .unwrap();
+        writer1.add_field(1, 42.into()).unwrap();
+        writer1.add_field(2, "first".into()).unwrap();
         let record1 = writer1.build().unwrap();
 
         let mut writer2 = ImprintWriter::new(SchemaId {
@@ -470,10 +450,8 @@ mod tests {
             schema_hash: 0xcafebabe,
         })
         .unwrap();
-        writer2
-            .add_field(2, Value::String("second".to_string()))
-            .unwrap();
-        writer2.add_field(3, Value::Bool(true)).unwrap();
+        writer2.add_field(2, "second".into()).unwrap();
+        writer2.add_field(3, true.into()).unwrap();
         let record2 = writer2.build().unwrap();
 
         // When merging with default options (keep zombie data)
@@ -481,12 +459,9 @@ mod tests {
 
         // Then first occurrence of duplicate fields should be kept
         assert_eq!(merged.directory.len(), 3);
-        assert_eq!(merged.get_value(1).unwrap(), Some(Value::Int32(42)));
-        assert_eq!(
-            merged.get_value(2).unwrap(),
-            Some(Value::String("first".to_string()))
-        );
-        assert_eq!(merged.get_value(3).unwrap(), Some(Value::Bool(true)));
+        assert_eq!(merged.get_value(1).unwrap(), Some(42.into()));
+        assert_eq!(merged.get_value(2).unwrap(), Some("first".into()));
+        assert_eq!(merged.get_value(3).unwrap(), Some(true.into()));
 
         // And payload should be larger due to zombie data
         let filtered_merged = record1
@@ -508,7 +483,7 @@ mod tests {
             schema_hash: 0xdeadbeef,
         };
         let mut writer1 = ImprintWriter::new(schema1).unwrap();
-        writer1.add_field(1, Value::Int32(42)).unwrap();
+        writer1.add_field(1, 42.into()).unwrap();
         let record1 = writer1.build().unwrap();
 
         let schema2 = SchemaId {
@@ -516,7 +491,7 @@ mod tests {
             schema_hash: 0xcafebabe,
         };
         let mut writer2 = ImprintWriter::new(schema2).unwrap();
-        writer2.add_field(2, Value::Bool(true)).unwrap();
+        writer2.add_field(2, true.into()).unwrap();
         let record2 = writer2.build().unwrap();
 
         // When merging the records
