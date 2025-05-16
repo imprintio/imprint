@@ -2,7 +2,7 @@ use crate::{
     error::ImprintError,
     types::{DirectoryEntry, Header, ImprintRecord, SchemaId},
 };
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 
 pub trait Project {
     fn project(&self, field_ids: &[u32]) -> Result<ImprintRecord, ImprintError>;
@@ -14,70 +14,57 @@ impl Project for ImprintRecord {
         sorted_field_ids.sort_unstable();
         sorted_field_ids.dedup();
 
+        // we do all this shenanigans with the ranges to avoid allocating a new
+        // payload buffer until we know the final size (zero copy makes a significant
+        // difference here)
+        let mut new_directory = Vec::with_capacity(sorted_field_ids.len());
         let mut ranges = Vec::new();
-        let mut current_range: Option<(u32, u32)> = None; // (start_offset, length)
-        let mut dir_idx = 0;
-        let mut total_size = 0;
-        let mut new_directory = Vec::with_capacity(field_ids.len());
+
+        // iterate through the directory fields and compute ranges to copy over
+        let mut field_ids_idx = 0;
+        let mut directory_idx = 0;
         let mut current_offset = 0;
 
-        for field_id in &sorted_field_ids {
-            // Advance directory index until we find the field or pass it - we can consider
-            // using a binary search here if we know that the projection is sparse relative
-            // to the directory
-            while dir_idx < self.directory.len() && self.directory[dir_idx].id < *field_id {
-                dir_idx += 1;
-            }
+        while directory_idx < self.directory.len() && field_ids_idx < sorted_field_ids.len() {
+            let field = &self.directory[directory_idx];
 
-            if dir_idx < self.directory.len() && self.directory[dir_idx].id == *field_id {
-                let entry = &self.directory[dir_idx];
-                let field_bytes = self.get_raw_bytes(*field_id).unwrap();
-                let field_len = field_bytes.len() as u32;
+            if field.id == sorted_field_ids[field_ids_idx] {
+                // Get the next field's offset to determine this field's length
+                // we can't just use get_raw_bytes here because the field may
+                // start with a length prefix
+                let next_offset = if directory_idx + 1 < self.directory.len() {
+                    self.directory[directory_idx + 1].offset
+                } else {
+                    self.payload.len() as u32
+                };
 
-                // Add directory entry
+                let field_length = next_offset - field.offset;
+
                 new_directory.push(DirectoryEntry {
-                    id: entry.id,
-                    type_code: entry.type_code,
+                    id: field.id,
+                    type_code: field.type_code,
                     offset: current_offset,
                 });
 
-                match current_range {
-                    None => {
-                        current_range = Some((entry.offset, field_len));
-                    }
-                    Some((start, len)) => {
-                        if entry.offset == start + len {
-                            current_range = Some((start, len + field_len));
-                        } else {
-                            ranges.push((start, len));
-                            total_size += len as usize;
-                            current_offset += len;
-                            current_range = Some((entry.offset, field_len));
-                        }
-                    }
-                }
+                ranges.push((field.offset, next_offset));
+                current_offset += field_length;
+                field_ids_idx += 1;
             }
+
+            directory_idx += 1;
         }
 
-        // Add the last range if it exists
-        if let Some((_, len)) = current_range {
-            ranges.push(current_range.unwrap());
-            total_size += len as usize;
+        let mut new_payload = BytesMut::with_capacity(current_offset as usize);
+        for range in ranges {
+            new_payload.extend_from_slice(&self.payload[range.0 as usize..range.1 as usize]);
         }
 
-        let mut new_payload = BytesMut::with_capacity(total_size);
-        for (start, len) in ranges {
-            new_payload.put_slice(&self.payload[start as usize..(start + len) as usize]);
-        }
-
-        // Create the projected record with same header but new directory and payload
         Ok(ImprintRecord {
             header: Header {
                 flags: self.header.flags,
-                // TODO: we need to generate a new schema id for the projected record
                 schema_id: SchemaId {
-                    fieldspace_id: 0xdead,
-                    schema_hash: 0xbeef,
+                    fieldspace_id: self.header.schema_id.fieldspace_id,
+                    schema_hash: 0xdeadbeef, // TODO: compute the correct schema hash
                 },
             },
             directory: new_directory,
