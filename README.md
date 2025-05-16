@@ -149,24 +149,6 @@ To help illustrate the impact of Imprint's data format on common incremental,
 row-oriented use cases we outline a few of the algorithms used for the most
 common set of operations.
 
-### Projection (Field Subset)
-
-Projection can be done without deserializing any of the payload. After
-parsing the header and the field directory, the byte slices within the
-payload can be directly referenced and appended to a new buffer.
-
-```
-header = parse header
-fields = parse field directory
-
-new_schema = []
-new_payload = []
-for field in fields:
-  if field is in projection:
-    new_schema.append(field)
-    new_payload.append(payload.bytes[field.offset:field.offset + field.length])
-```
-
 ### Composition (Join / Merge)
 
 Merging two Imprint rows with compatible schemas (there are no fields with the
@@ -187,11 +169,36 @@ the second payload can be modified to remove the discarded value to save
 space).
 
 The results of benchmarking a basic merge use case when compared to protobuf
-improves linearly with the size of the records being merged. In a simple
-benchmark, Imprint performs up to 76% better than protobuf at merging two
+show that Imprint is able to merge records of increasingly large size in constant
+time while Protobuf degrades linearly with the size of the input records. In a
+simple benchmark, Imprint performs up to 76% better than protobuf at merging two
 records.
 
 ![Imprint v. Protobuf: Merging Records](.github/images/imprint-merge_bench.png)
 
 The source for the benchmarks are available in the `benches` directory of this
 repository.
+
+### Projection (Field Subset)
+
+Projection can be done without deserializing any of the payload. After
+parsing the header and the field directory, the byte slices within the
+payload can be directly referenced and appended to a new buffer.
+
+```
+header = parse header
+fields = parse field directory
+
+new_schema = []
+new_payload = []
+for field in fields:
+  if field is in projection:
+    new_schema.append(field)
+    new_payload.append(payload.bytes[field.offset:field.offset + field.length])
+```
+
+Similarly to merging records, Imprint projection is constant to the data being
+projected as opposed to the size of the input record while protobuf projection
+performance degrades linearly as the size of the input record increases. 
+
+![Imprint v. Protobuf: Projecting Records](.github/images/imprint-project_bench.png)

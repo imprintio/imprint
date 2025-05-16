@@ -2,68 +2,69 @@ use crate::{
     error::ImprintError,
     types::{DirectoryEntry, Header, ImprintRecord, SchemaId},
 };
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 
 pub trait Project {
     fn project(&self, field_ids: &[u32]) -> Result<ImprintRecord, ImprintError>;
 }
 impl Project for ImprintRecord {
     fn project(&self, field_ids: &[u32]) -> Result<ImprintRecord, ImprintError> {
-        // Create new directory entries for the projected fields
-        let mut new_directory = Vec::with_capacity(field_ids.len());
-        let mut new_payload = BytesMut::new();
-
         // Sort and deduplicate the field IDs for efficient matching with sorted directory
         let mut sorted_field_ids = field_ids.to_vec();
         sorted_field_ids.sort_unstable();
         sorted_field_ids.dedup();
 
-        // Since both arrays are now sorted, we can do a single pass through both
-        let mut dir_idx = 0;
-        let mut field_idx = 0;
+        // we do all this shenanigans with the ranges to avoid allocating a new
+        // payload buffer until we know the final size (zero copy makes a significant
+        // difference here)
+        let mut new_directory = Vec::with_capacity(sorted_field_ids.len());
+        let mut ranges = Vec::new();
 
-        // we do a linear scan through both, though we could consider a binary search
-        // if the projection is sparse enough (maybe there is some heuristic we can
-        // use to determine this)
-        while dir_idx < self.directory.len() && field_idx < sorted_field_ids.len() {
-            let entry = &self.directory[dir_idx];
-            let field_id = sorted_field_ids[field_idx];
+        // iterate through the directory fields and compute ranges to copy over
+        let mut field_ids_idx = 0;
+        let mut directory_idx = 0;
+        let mut current_offset = 0;
 
-            match entry.id.cmp(&field_id) {
-                std::cmp::Ordering::Equal => {
-                    // Create new directory entry with updated offset
-                    let new_entry = DirectoryEntry {
-                        id: entry.id,
-                        type_code: entry.type_code,
-                        offset: new_payload.len() as u32,
-                    };
-                    new_directory.push(new_entry);
+        while directory_idx < self.directory.len() && field_ids_idx < sorted_field_ids.len() {
+            let field = &self.directory[directory_idx];
 
-                    // Copy the bytes directly from the original payload - unwrap
-                    // is safe because we got the field_id from the directory so
-                    // it should exist in the original payload
-                    new_payload.put_slice(&self.get_raw_bytes(field_id).unwrap());
+            if field.id == sorted_field_ids[field_ids_idx] {
+                // Get the next field's offset to determine this field's length
+                // we can't just use get_raw_bytes here because the field may
+                // start with a length prefix
+                let next_offset = if directory_idx + 1 < self.directory.len() {
+                    self.directory[directory_idx + 1].offset
+                } else {
+                    self.payload.len() as u32
+                };
 
-                    dir_idx += 1;
-                    field_idx += 1;
-                }
-                std::cmp::Ordering::Less => {
-                    dir_idx += 1;
-                }
-                std::cmp::Ordering::Greater => {
-                    field_idx += 1;
-                }
+                let field_length = next_offset - field.offset;
+
+                new_directory.push(DirectoryEntry {
+                    id: field.id,
+                    type_code: field.type_code,
+                    offset: current_offset,
+                });
+
+                ranges.push((field.offset, next_offset));
+                current_offset += field_length;
+                field_ids_idx += 1;
             }
+
+            directory_idx += 1;
         }
 
-        // Create the projected record with same header but new directory and payload
+        let mut new_payload = BytesMut::with_capacity(current_offset as usize);
+        for range in ranges {
+            new_payload.extend_from_slice(&self.payload[range.0 as usize..range.1 as usize]);
+        }
+
         Ok(ImprintRecord {
             header: Header {
                 flags: self.header.flags,
-                // TODO: we need to generate a new schema id for the projected record
                 schema_id: SchemaId {
-                    fieldspace_id: 0xdead,
-                    schema_hash: 0xbeef,
+                    fieldspace_id: self.header.schema_id.fieldspace_id,
+                    schema_hash: 0xdeadbeef, // TODO: compute the correct schema hash
                 },
             },
             directory: new_directory,
