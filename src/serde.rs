@@ -105,8 +105,8 @@ impl ValueRead for Value {
                 let v = bytes.get_u8();
                 bytes_read += 1;
                 match v {
-                    0 => Value::Primitive(PrimitiveValue::Bool(false)),
-                    1 => Value::Primitive(PrimitiveValue::Bool(true)),
+                    0 => false.into(),
+                    1 => true.into(),
                     _ => return Err(ImprintError::SchemaError("invalid boolean value".into())),
                 }
             }
@@ -119,7 +119,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_i32_le();
                 bytes_read += 4;
-                Value::Primitive(PrimitiveValue::Int32(v))
+                v.into()
             }
             TypeCode::Int64 => {
                 if bytes.remaining() < 8 {
@@ -130,7 +130,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_i64_le();
                 bytes_read += 8;
-                Value::Primitive(PrimitiveValue::Int64(v))
+                v.into()
             }
             TypeCode::Float32 => {
                 if bytes.remaining() < 4 {
@@ -141,7 +141,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_f32_le();
                 bytes_read += 4;
-                Value::Primitive(PrimitiveValue::Float32(v))
+                v.into()
             }
             TypeCode::Float64 => {
                 if bytes.remaining() < 8 {
@@ -152,7 +152,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_f64_le();
                 bytes_read += 8;
-                Value::Primitive(PrimitiveValue::Float64(v))
+                v.into()
             }
             TypeCode::Bytes => {
                 let (len, len_size) = varint::decode(bytes.clone())?;
@@ -168,7 +168,7 @@ impl ValueRead for Value {
                 let mut v = vec![0; len as usize];
                 bytes.copy_to_slice(&mut v);
                 bytes_read += len as usize;
-                Value::Primitive(PrimitiveValue::Bytes(v))
+                v.into()
             }
             TypeCode::String => {
                 let (len, len_size) = varint::decode(bytes.clone())?;
@@ -185,7 +185,7 @@ impl ValueRead for Value {
                 bytes.copy_to_slice(&mut v);
                 bytes_read += len as usize;
                 let s = String::from_utf8(v).map_err(|_| ImprintError::InvalidUtf8String)?;
-                Value::Primitive(PrimitiveValue::String(s))
+                s.into()
             }
             TypeCode::Array => {
                 let element_type = TypeCode::try_from(bytes.get_u8())?;
@@ -207,7 +207,7 @@ impl ValueRead for Value {
             TypeCode::Row => {
                 let (record, size) = ImprintRecord::read(bytes)?;
                 bytes_read += size;
-                Value::Complex(ComplexValue::Row(Box::new(record)))
+                Box::new(record).into()
             }
         };
         Ok((value, bytes_read))
