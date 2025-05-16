@@ -76,9 +76,11 @@ impl Write for Value {
                 buf.put_u8(type_code as u8);
                 for value in v {
                     if value.type_code() != type_code {
-                        return Err(ImprintError::SchemaError(
-                            "array elements must have same type".into(),
-                        ));
+                        return Err(ImprintError::SchemaError(format!(
+                            "array elements must have same type code: {:?} != {:?}",
+                            value.type_code(),
+                            type_code
+                        )));
                     }
                     value.write(buf)?;
                 }
@@ -96,14 +98,18 @@ impl Write for Value {
                 buf.put_u8(value_type_code as u8);
                 for (key, value) in m {
                     if key.type_code() != key_type_code {
-                        return Err(ImprintError::SchemaError(
-                            "map keys must have same type".into(),
-                        ));
+                        return Err(ImprintError::SchemaError(format!(
+                            "map keys must have same type code: {:?} != {:?}",
+                            key.type_code(),
+                            key_type_code
+                        )));
                     }
                     if value.type_code() != value_type_code {
-                        return Err(ImprintError::SchemaError(
-                            "map values must have same type".into(),
-                        ));
+                        return Err(ImprintError::SchemaError(format!(
+                            "map values must have same type code: {:?} != {:?}",
+                            value.type_code(),
+                            value_type_code
+                        )));
                     }
                     key.write(buf)?;
                     value.write(buf)?;
