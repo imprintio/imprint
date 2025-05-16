@@ -30,11 +30,6 @@ impl ImprintWriter {
 
     /// Consumes the writer and builds an ImprintRecord.
     pub fn build(self) -> Result<ImprintRecord, ImprintError> {
-        let header = Header {
-            flags: Flags::new(Flags::FIELD_DIRECTORY),
-            schema_id: self.schema_id,
-        };
-
         let mut directory = Vec::with_capacity(self.fields.len());
         let mut payload = BytesMut::new();
 
@@ -46,6 +41,12 @@ impl ImprintWriter {
             });
             value.write(&mut payload)?;
         }
+
+        let header = Header {
+            flags: Flags::new(Flags::FIELD_DIRECTORY),
+            schema_id: self.schema_id,
+            payload_size: payload.len() as u32,
+        };
 
         Ok(ImprintRecord {
             header,

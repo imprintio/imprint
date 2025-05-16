@@ -66,6 +66,7 @@ impl Project for ImprintRecord {
                     fieldspace_id: self.header.schema_id.fieldspace_id,
                     schema_hash: 0xdeadbeef, // TODO: compute the correct schema hash
                 },
+                payload_size: new_payload.len() as u32,
             },
             directory: new_directory,
             payload: new_payload.freeze(),
@@ -180,6 +181,7 @@ impl Merge for ImprintRecord {
             header: Header {
                 flags: self.header.flags,
                 schema_id: self.header.schema_id,
+                payload_size: new_payload.len() as u32,
             },
             directory: new_directory,
             payload: new_payload.freeze(),

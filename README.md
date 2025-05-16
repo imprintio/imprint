@@ -65,25 +65,26 @@ it can be manipulated with constant‑time pointer arithmetic for projection and
 composition operations.
 
 ```
-+--------------------------------------------+
-| Magic | Version | Flags | Schema Hash / ID |
-+--------------------------------------------+
-|        VarInt: Field Count (N)             |
-+--------------------------------------------+
-|  N x DIRECTORY ENTRY (sorted by field id)  |
-+--------------------------------------------+
-|                 PAYLOAD                    |
-+--------------------------------------------+
++-----------------------------------------------------+
+| Magic | Version | Flags | Fieldspace | Payload Size |
++-----------------------------------------------------+
+|        VarInt: Field Count (N)                      |
++-----------------------------------------------------+
+|  N x DIRECTORY ENTRY (sorted by field id)           |
++-----------------------------------------------------+
+|                 PAYLOAD                             |
++-----------------------------------------------------+
 ```
 
 ### Header Format
 
-| Offset | Size | Field   | Notes                                               |
-|--------|------|---------|-----------------------------------------------------|
-| 0      | 1    | Magic   | ASCII `0x49` ("I") to guard against misparsing      |
-| 1      | 1    | Version | Currently `0x01`. Allows for wire-format evolution  |
-| 2      | 1    | Flags   | See below                                           |
-| 3      | 8    | Schema  | 32-bit fieldspace id + 32-bit schema hash           |
+| Offset | Size | Field        | Notes                                               |
+|--------|------|--------------|-----------------------------------------------------|
+| 0      | 1    | Magic        | ASCII `0x49` ("I") to guard against misparsing      |
+| 1      | 1    | Version      | Currently `0x01`. Allows for wire-format evolution  |
+| 2      | 1    | Flags        | See below                                           |
+| 3      | 8    | Schema       | 32-bit fieldspace id + 32-bit schema hash           |
+| 11     | 4    | Payload Size | The total size of the payload                       |
 
 The flags are a reserved bitset that indicate how to deserialize the rest of the
 record:
@@ -103,6 +104,9 @@ Schemas in Imprint have two components:
 The Field Directory (see below) is a binary format definition of a schema,
 and is typically cached (keyed by the schema id) to avoid deserializing it
 for repeated reads of records that contain the same fields.
+
+The payload size is helpful when reading nested records (e.g. a single buffer
+that contains multiple records).
 
 ### Field Directory
 
