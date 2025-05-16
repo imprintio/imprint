@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::{
     MAGIC, VERSION,
     error::ImprintError,
-    types::{DirectoryEntry, Flags, Header, ImprintRecord, SchemaId, TypeCode, Value},
+    types::{DirectoryEntry, Flags, Header, ImprintRecord, MapKey, SchemaId, TypeCode, Value},
     varint,
 };
 
@@ -74,15 +76,73 @@ impl Write for Value {
                 buf.put_u8(type_code as u8);
                 for value in v {
                     if value.type_code() != type_code {
-                        return Err(ImprintError::SchemaError(
-                            "array elements must have same type".into(),
-                        ));
+                        return Err(ImprintError::SchemaError(format!(
+                            "array elements must have same type code: {:?} != {:?}",
+                            value.type_code(),
+                            type_code
+                        )));
                     }
                     value.write(buf)?;
                 }
                 Ok(())
             }
+            Self::Map(m) => {
+                varint::encode(m.len() as u32, buf);
+                if m.is_empty() {
+                    return Ok(());
+                }
+
+                let key_type_code = m.keys().next().unwrap().type_code();
+                let value_type_code = m.values().next().unwrap().type_code();
+                buf.put_u8(key_type_code as u8);
+                buf.put_u8(value_type_code as u8);
+                for (key, value) in m {
+                    if key.type_code() != key_type_code {
+                        return Err(ImprintError::SchemaError(format!(
+                            "map keys must have same type code: {:?} != {:?}",
+                            key.type_code(),
+                            key_type_code
+                        )));
+                    }
+                    if value.type_code() != value_type_code {
+                        return Err(ImprintError::SchemaError(format!(
+                            "map values must have same type code: {:?} != {:?}",
+                            value.type_code(),
+                            value_type_code
+                        )));
+                    }
+                    key.write(buf)?;
+                    value.write(buf)?;
+                }
+                Ok(())
+            }
             Self::Row(v) => v.write(buf),
+        }
+    }
+}
+
+impl Write for MapKey {
+    fn write(&self, buf: &mut BytesMut) -> Result<(), ImprintError> {
+        match self {
+            MapKey::Int32(i) => {
+                buf.put_i32_le(*i);
+                Ok(())
+            }
+            MapKey::Int64(i) => {
+                buf.put_i64_le(*i);
+                Ok(())
+            }
+            MapKey::Bytes(b) => {
+                varint::encode(b.len() as u32, buf);
+                buf.put_slice(b);
+                Ok(())
+            }
+            MapKey::String(s) => {
+                let bytes = s.as_bytes();
+                varint::encode(bytes.len() as u32, buf);
+                buf.put_slice(bytes);
+                Ok(())
+            }
         }
     }
 }
@@ -206,6 +266,35 @@ impl ValueRead for Value {
                 }
                 values.into()
             }
+            TypeCode::Map => {
+                let (len, len_size) = varint::decode(bytes.clone())?;
+                bytes.advance(len_size);
+                bytes_read += len_size;
+
+                if len == 0 {
+                    return Ok((Value::Map(HashMap::new()), bytes_read));
+                }
+
+                let key_type = TypeCode::try_from(bytes.get_u8())?;
+                bytes_read += 1;
+
+                let value_type = TypeCode::try_from(bytes.get_u8())?;
+                bytes_read += 1;
+
+                let mut map = HashMap::with_capacity(len as usize);
+                for _ in 0..len {
+                    let (key, key_size) = MapKey::read(key_type, bytes.clone())?;
+                    bytes.advance(key_size);
+                    bytes_read += key_size;
+
+                    let (value, value_size) = Self::read(value_type, bytes.clone())?;
+                    bytes.advance(value_size);
+                    bytes_read += value_size;
+
+                    map.insert(key, value);
+                }
+                map.into()
+            }
             TypeCode::Row => {
                 let (record, size) = ImprintRecord::read(bytes)?;
                 bytes_read += size;
@@ -213,6 +302,13 @@ impl ValueRead for Value {
             }
         };
         Ok((value, bytes_read))
+    }
+}
+
+impl ValueRead for MapKey {
+    fn read(type_code: TypeCode, bytes: Bytes) -> Result<(Self, usize), ImprintError> {
+        let (value, size) = Value::read(type_code, bytes.clone())?;
+        Ok((MapKey::try_from(value)?, size))
     }
 }
 
@@ -419,6 +515,15 @@ mod tests {
     fn arb_homogeneous_array(element_gen: BoxedStrategy<Value>) -> BoxedStrategy<Value> {
         prop::collection::vec(element_gen, 0..100)
             .prop_map(Value::Array)
+            .boxed()
+    }
+
+    fn arb_homogeneous_map(
+        key_gen: BoxedStrategy<MapKey>,
+        value_gen: BoxedStrategy<Value>,
+    ) -> BoxedStrategy<Value> {
+        prop::collection::hash_map(key_gen, value_gen, 0..10)
+            .prop_map(Value::Map)
             .boxed()
     }
 
@@ -630,6 +735,7 @@ mod tests {
                 Value::Bytes(_) => arb_homogeneous_array(prop::collection::vec(any::<u8>(), 0..100).prop_map(Value::Bytes).boxed()),
                 Value::String(_) => arb_homogeneous_array(".*".prop_map(Value::String).boxed()),
                 Value::Array(_) => arb_homogeneous_array(prop::collection::vec(any::<i32>().prop_map(Value::Int32), 0..100).prop_map(Value::Array).boxed()),
+                Value::Map(_) => arb_homogeneous_array(prop::collection::hash_map(any::<i32>().prop_map(MapKey::Int32), any::<i32>().prop_map(Value::Int32), 0..100).prop_map(Value::Map).boxed()),
                 Value::Row(_) => arb_homogeneous_array(arb_simple_row().boxed()),
             };
 
@@ -655,6 +761,67 @@ mod tests {
             let (record, _) = ImprintRecord::read(buf.freeze()).map_err(|e| TestCaseError::fail(e.to_string()))?;
             let got = record.get_value(1).map_err(|e| TestCaseError::fail(e.to_string()))?;
             prop_assert_eq!(got, Some(array));
+        }
+
+        #[test]
+        fn prop_roundtrip_maps(
+            key_type in prop_oneof![
+                Just(TypeCode::Int32),
+                Just(TypeCode::Int64),
+                Just(TypeCode::Bytes),
+                Just(TypeCode::String)
+            ],
+            base_value in arb_value()
+        ) {
+            // Create a strategy for keys of the specified type
+            let key_strategy = match key_type {
+                TypeCode::Int32 => any::<i32>().prop_map(MapKey::Int32).boxed(),
+                TypeCode::Int64 => any::<i64>().prop_map(MapKey::Int64).boxed(),
+                TypeCode::Bytes => prop::collection::vec(any::<u8>(), 0..100).prop_map(MapKey::Bytes).boxed(),
+                TypeCode::String => ".*".prop_map(MapKey::String).boxed(),
+                _ => panic!("Unsupported key type"),
+            };
+
+            // Create a strategy for values of the specified type
+            let value_strategy = match base_value {
+                Value::Null => Just(Value::Null).boxed(),
+                Value::Bool(_) => any::<bool>().prop_map(Value::Bool).boxed(),
+                Value::Int32(_) => any::<i32>().prop_map(Value::Int32).boxed(),
+                Value::Int64(_) => any::<i64>().prop_map(Value::Int64).boxed(),
+                Value::Float32(_) => any::<f32>().prop_map(Value::Float32).boxed(),
+                Value::Float64(_) => any::<f64>().prop_map(Value::Float64).boxed(),
+                Value::Bytes(_) => prop::collection::vec(any::<u8>(), 0..100).prop_map(Value::Bytes).boxed(),
+                Value::String(_) => ".*".prop_map(Value::String).boxed(),
+                Value::Array(_) => arb_homogeneous_array(prop::collection::vec(any::<i32>().prop_map(Value::Int32), 0..100).prop_map(Value::Array).boxed()),
+                Value::Map(_) => arb_homogeneous_array(prop::collection::hash_map(any::<i32>().prop_map(MapKey::Int32), any::<i32>().prop_map(Value::Int32), 0..100).prop_map(Value::Map).boxed()),
+                Value::Row(_) => arb_homogeneous_array(arb_simple_row().boxed()),
+            };
+
+            // Create a strategy for maps with these key and value types
+            let map_strategy = arb_homogeneous_map(key_strategy, value_strategy);
+
+            // Generate a map
+            let map = map_strategy
+                .new_tree(&mut TestRunner::default())
+                .map_err(|e| TestCaseError::fail(e.to_string()))?
+                .current();
+
+            // Create a record with the map
+            let mut writer = ImprintWriter::new(SchemaId {
+                fieldspace_id: 1,
+                schema_hash: 0xdeadbeef,
+            }).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            writer.add_field(1, map.clone()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+
+            // Build and serialize
+            let record = writer.build().map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let mut buf = BytesMut::new();
+            record.write(&mut buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+
+            // Deserialize and verify
+            let (record, _) = ImprintRecord::read(buf.freeze()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let got = record.get_value(1).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, Some(map));
         }
     }
 
