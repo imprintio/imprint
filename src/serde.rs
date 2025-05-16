@@ -290,72 +290,9 @@ impl ValueRead for Value {
 }
 
 impl ValueRead for MapKey {
-    fn read(type_code: TypeCode, mut bytes: Bytes) -> Result<(Self, usize), ImprintError> {
-        let mut bytes_read = 0;
-
-        let key_type = type_code;
-
-        let key = match key_type {
-            TypeCode::Int32 => {
-                if bytes.remaining() < 4 {
-                    return Err(ImprintError::BufferUnderflow {
-                        needed: 4,
-                        available: bytes.remaining(),
-                    });
-                }
-                let v = bytes.get_i32_le();
-                bytes_read += 4;
-                v.into()
-            }
-            TypeCode::Int64 => {
-                if bytes.remaining() < 8 {
-                    return Err(ImprintError::BufferUnderflow {
-                        needed: 8,
-                        available: bytes.remaining(),
-                    });
-                }
-                let v = bytes.get_i64_le();
-                bytes_read += 8;
-                v.into()
-            }
-            TypeCode::Bytes => {
-                let (len, len_size) = varint::decode(bytes.clone())?;
-                bytes.advance(len_size);
-                bytes_read += len_size;
-
-                if bytes.remaining() < len as usize {
-                    return Err(ImprintError::BufferUnderflow {
-                        needed: len as usize,
-                        available: bytes.remaining(),
-                    });
-                }
-                let mut v = vec![0; len as usize];
-                bytes.copy_to_slice(&mut v);
-                bytes_read += len as usize;
-                v.into()
-            }
-            TypeCode::String => {
-                let (len, len_size) = varint::decode(bytes.clone())?;
-                bytes.advance(len_size);
-                bytes_read += len_size;
-
-                if bytes.remaining() < len as usize {
-                    return Err(ImprintError::BufferUnderflow {
-                        needed: len as usize,
-                        available: bytes.remaining(),
-                    });
-                }
-                let mut v = vec![0; len as usize];
-                bytes.copy_to_slice(&mut v);
-                bytes_read += len as usize;
-                let s = String::from_utf8(v).map_err(|_| ImprintError::InvalidUtf8String)?;
-                s.into()
-            }
-            _ => {
-                return Err(ImprintError::SchemaError("invalid map key type".into()));
-            }
-        };
-        Ok((key, bytes_read))
+    fn read(type_code: TypeCode, bytes: Bytes) -> Result<(Self, usize), ImprintError> {
+        let (value, size) = Value::read(type_code, bytes.clone())?;
+        Ok((MapKey::try_from(value)?, size))
     }
 }
 
