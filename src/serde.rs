@@ -760,11 +760,8 @@ mod tests {
                 Just(TypeCode::Bytes),
                 Just(TypeCode::String)
             ],
-            base_value in arb_primitive_value()
+            base_value in arb_value()
         ) {
-            // Skip arrays, maps, and rows as value types
-            prop_assume!(!matches!(base_value, Value::Array(_) | Value::Map(_) | Value::Row(_)));
-
             // Create a strategy for keys of the specified type
             let key_strategy = match key_type {
                 TypeCode::Int32 => any::<i32>().prop_map(MapKey::Int32).boxed(),
@@ -784,7 +781,9 @@ mod tests {
                 Value::Float64(_) => any::<f64>().prop_map(Value::Float64).boxed(),
                 Value::Bytes(_) => prop::collection::vec(any::<u8>(), 0..100).prop_map(Value::Bytes).boxed(),
                 Value::String(_) => ".*".prop_map(Value::String).boxed(),
-                _ => panic!("Unsupported value type"),
+                Value::Array(_) => arb_homogeneous_array(prop::collection::vec(any::<i32>().prop_map(Value::Int32), 0..100).prop_map(Value::Array).boxed()),
+                Value::Map(_) => arb_homogeneous_array(prop::collection::hash_map(any::<i32>().prop_map(MapKey::Int32), any::<i32>().prop_map(Value::Int32), 0..100).prop_map(Value::Map).boxed()),
+                Value::Row(_) => arb_homogeneous_array(arb_simple_row().boxed()),
             };
 
             // Create a strategy for maps with these key and value types
