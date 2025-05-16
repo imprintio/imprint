@@ -724,6 +724,7 @@ mod tests {
                 Value::Bytes(_) => arb_homogeneous_array(prop::collection::vec(any::<u8>(), 0..100).prop_map(Value::Bytes).boxed()),
                 Value::String(_) => arb_homogeneous_array(".*".prop_map(Value::String).boxed()),
                 Value::Array(_) => arb_homogeneous_array(prop::collection::vec(any::<i32>().prop_map(Value::Int32), 0..100).prop_map(Value::Array).boxed()),
+                Value::Map(_) => arb_homogeneous_array(prop::collection::hash_map(any::<i32>().prop_map(MapKey::Int32), any::<i32>().prop_map(Value::Int32), 0..100).prop_map(Value::Map).boxed()),
                 Value::Row(_) => arb_homogeneous_array(arb_simple_row().boxed()),
             };
 
