@@ -101,6 +101,137 @@ impl Value {
             Self::Row(_) => TypeCode::Row,
         }
     }
+
+    /// Try to interpret this Value as a valid MapKey.
+    pub fn as_map_key(self) -> Result<MapKey, ImprintError> {
+        MapKey::try_from(self)
+    }
+}
+
+impl From<bool> for Value {
+    fn from(b: bool) -> Value {
+        Value::Bool(b)
+    }
+}
+
+impl From<i32> for Value {
+    fn from(i: i32) -> Value {
+        Value::Int32(i)
+    }
+}
+
+impl From<i64> for Value {
+    fn from(i: i64) -> Value {
+        Value::Int64(i)
+    }
+}
+
+impl From<f32> for Value {
+    fn from(f: f32) -> Value {
+        Value::Float32(f)
+    }
+}
+
+impl From<f64> for Value {
+    fn from(f: f64) -> Value {
+        Value::Float64(f)
+    }
+}
+
+impl From<Vec<u8>> for Value {
+    fn from(b: Vec<u8>) -> Value {
+        Value::Bytes(b)
+    }
+}
+
+impl From<Bytes> for Value {
+    fn from(b: Bytes) -> Value {
+        Value::Bytes(b.into())
+    }
+}
+
+impl From<String> for Value {
+    fn from(s: String) -> Value {
+        Value::String(s)
+    }
+}
+
+impl From<&str> for Value {
+    fn from(s: &str) -> Value {
+        Value::String(s.to_string())
+    }
+}
+
+impl<T: Into<Value>> From<Vec<T>> for Value {
+    fn from(v: Vec<T>) -> Value {
+        Value::Array(v.into_iter().map(Into::into).collect())
+    }
+}
+
+impl From<Box<ImprintRecord>> for Value {
+    fn from(r: Box<ImprintRecord>) -> Value {
+        Value::Row(r)
+    }
+}
+
+impl From<ImprintRecord> for Value {
+    fn from(r: ImprintRecord) -> Value {
+        Value::Row(Box::new(r))
+    }
+}
+
+impl From<MapKey> for Value {
+    fn from(key: MapKey) -> Value {
+        match key {
+            MapKey::Int32(i) => Value::Int32(i),
+            MapKey::Int64(i) => Value::Int64(i),
+            MapKey::Bytes(b) => Value::Bytes(b),
+            MapKey::String(s) => Value::String(s),
+        }
+    }
+}
+
+/// Lets you do `Value::... == MapKey::...`
+impl PartialEq<MapKey> for Value {
+    fn eq(&self, other: &MapKey) -> bool {
+        other == self
+    }
+}
+
+/// A subset of `Value` that’s valid as a map key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MapKey {
+    Int32(i32),
+    Int64(i64),
+    Bytes(Vec<u8>),
+    String(String),
+}
+
+impl TryFrom<Value> for MapKey {
+    type Error = ImprintError;
+
+    fn try_from(v: Value) -> Result<Self, ImprintError> {
+        match v {
+            Value::Int32(i) => Ok(MapKey::Int32(i)),
+            Value::Int64(i) => Ok(MapKey::Int64(i)),
+            Value::Bytes(b) => Ok(MapKey::Bytes(b)),
+            Value::String(s) => Ok(MapKey::String(s)),
+            other => Err(ImprintError::InvalidFieldType(other.type_code() as u8)),
+        }
+    }
+}
+
+/// Allow `MapKey::... == Value::...
+impl PartialEq<Value> for MapKey {
+    fn eq(&self, other: &Value) -> bool {
+        match (self, other) {
+            (MapKey::Int32(a), Value::Int32(b)) => a == b,
+            (MapKey::Int64(a), Value::Int64(b)) => a == b,
+            (MapKey::Bytes(a), Value::Bytes(b)) => a == b,
+            (MapKey::String(a), Value::String(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 /// A directory entry describing a single field in an Imprint record.
@@ -164,5 +295,20 @@ impl ImprintRecord {
             .map(|e| e.offset as usize)
             .unwrap_or(self.payload.len());
         Some(self.payload.slice(start..next_offset))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_map_key_eq_value() {
+        assert!(MapKey::Int32(1) == Value::Int32(1));
+    }
+
+    #[test]
+    fn test_value_eq_map_key() {
+        assert!(Value::String("foo".into()) == MapKey::String("foo".into()));
     }
 }
