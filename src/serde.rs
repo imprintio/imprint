@@ -549,6 +549,15 @@ mod tests {
             .boxed()
     }
 
+    fn arb_homogeneous_map(
+        key_gen: BoxedStrategy<MapKey>,
+        value_gen: BoxedStrategy<Value>,
+    ) -> BoxedStrategy<Value> {
+        prop::collection::hash_map(key_gen, value_gen, 1..10)
+            .prop_map(Value::Map)
+            .boxed()
+    }
+
     #[test]
     fn should_handle_error_cases() {
         // Given an invalid magic byte
@@ -758,6 +767,68 @@ mod tests {
             let (record, _) = ImprintRecord::read(buf.freeze()).map_err(|e| TestCaseError::fail(e.to_string()))?;
             let got = record.get_value(1).map_err(|e| TestCaseError::fail(e.to_string()))?;
             prop_assert_eq!(got, Some(array));
+        }
+
+        #[test]
+        fn prop_roundtrip_maps(
+            key_type in prop_oneof![
+                Just(TypeCode::Int32),
+                Just(TypeCode::Int64),
+                Just(TypeCode::Bytes),
+                Just(TypeCode::String)
+            ],
+            base_value in arb_primitive_value()
+        ) {
+            // Skip arrays, maps, and rows as value types
+            prop_assume!(!matches!(base_value, Value::Array(_) | Value::Map(_) | Value::Row(_)));
+
+            // Create a strategy for keys of the specified type
+            let key_strategy = match key_type {
+                TypeCode::Int32 => any::<i32>().prop_map(MapKey::Int32).boxed(),
+                TypeCode::Int64 => any::<i64>().prop_map(MapKey::Int64).boxed(),
+                TypeCode::Bytes => prop::collection::vec(any::<u8>(), 0..100).prop_map(MapKey::Bytes).boxed(),
+                TypeCode::String => ".*".prop_map(MapKey::String).boxed(),
+                _ => panic!("Unsupported key type"),
+            };
+
+            // Create a strategy for values of the specified type
+            let value_strategy = match base_value {
+                Value::Null => Just(Value::Null).boxed(),
+                Value::Bool(_) => any::<bool>().prop_map(Value::Bool).boxed(),
+                Value::Int32(_) => any::<i32>().prop_map(Value::Int32).boxed(),
+                Value::Int64(_) => any::<i64>().prop_map(Value::Int64).boxed(),
+                Value::Float32(_) => any::<f32>().prop_map(Value::Float32).boxed(),
+                Value::Float64(_) => any::<f64>().prop_map(Value::Float64).boxed(),
+                Value::Bytes(_) => prop::collection::vec(any::<u8>(), 0..100).prop_map(Value::Bytes).boxed(),
+                Value::String(_) => ".*".prop_map(Value::String).boxed(),
+                _ => panic!("Unsupported value type"),
+            };
+
+            // Create a strategy for maps with these key and value types
+            let map_strategy = arb_homogeneous_map(key_strategy, value_strategy);
+
+            // Generate a map
+            let map = map_strategy
+                .new_tree(&mut TestRunner::default())
+                .map_err(|e| TestCaseError::fail(e.to_string()))?
+                .current();
+
+            // Create a record with the map
+            let mut writer = ImprintWriter::new(SchemaId {
+                fieldspace_id: 1,
+                schema_hash: 0xdeadbeef,
+            }).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            writer.add_field(1, map.clone()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+
+            // Build and serialize
+            let record = writer.build().map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let mut buf = BytesMut::new();
+            record.write(&mut buf).map_err(|e| TestCaseError::fail(e.to_string()))?;
+
+            // Deserialize and verify
+            let (record, _) = ImprintRecord::read(buf.freeze()).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            let got = record.get_value(1).map_err(|e| TestCaseError::fail(e.to_string()))?;
+            prop_assert_eq!(got, Some(map));
         }
     }
 
