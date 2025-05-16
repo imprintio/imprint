@@ -190,7 +190,7 @@ impl Merge for ImprintRecord {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ImprintWriter};
+    use crate::ImprintWriter;
 
     fn create_test_record() -> ImprintRecord {
         let mut writer = ImprintWriter::new(SchemaId {
