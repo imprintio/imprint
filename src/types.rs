@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::error::ImprintError;
 use crate::serde::ValueRead;
 use bytes::Bytes;
@@ -37,7 +39,8 @@ pub enum TypeCode {
     Bytes = 0x6,
     String = 0x7,
     Array = 0x8,
-    Row = 0x9,
+    Map = 0x9,
+    Row = 0xA,
 }
 
 impl TypeCode {
@@ -65,7 +68,8 @@ impl TryFrom<u8> for TypeCode {
             0x6 => Ok(Self::Bytes),
             0x7 => Ok(Self::String),
             0x8 => Ok(Self::Array),
-            0x9 => Ok(Self::Row),
+            0x9 => Ok(Self::Map),
+            0xA => Ok(Self::Row),
             _ => Err(ImprintError::InvalidFieldType(value)),
         }
     }
@@ -83,6 +87,7 @@ pub enum Value {
     Bytes(Vec<u8>),
     String(String),
     Array(Vec<Value>),
+    Map(HashMap<MapKey, Value>),
     Row(Box<ImprintRecord>),
 }
 
@@ -98,6 +103,7 @@ impl Value {
             Self::Bytes(_) => TypeCode::Bytes,
             Self::String(_) => TypeCode::String,
             Self::Array(_) => TypeCode::Array,
+            Self::Map(_) => TypeCode::Map,
             Self::Row(_) => TypeCode::Row,
         }
     }
@@ -168,6 +174,12 @@ impl<T: Into<Value>> From<Vec<T>> for Value {
     }
 }
 
+impl<K: Into<MapKey>, V: Into<Value>> From<HashMap<K, V>> for Value {
+    fn from(m: HashMap<K, V>) -> Value {
+        Value::Map(m.into_iter().map(|(k, v)| (k.into(), v.into())).collect())
+    }
+}
+
 impl From<Box<ImprintRecord>> for Value {
     fn from(r: Box<ImprintRecord>) -> Value {
         Value::Row(r)
@@ -205,6 +217,47 @@ pub enum MapKey {
     Int64(i64),
     Bytes(Vec<u8>),
     String(String),
+}
+
+impl MapKey {
+    pub fn type_code(&self) -> TypeCode {
+        match self {
+            MapKey::Int32(_) => TypeCode::Int32,
+            MapKey::Int64(_) => TypeCode::Int64,
+            MapKey::Bytes(_) => TypeCode::Bytes,
+            MapKey::String(_) => TypeCode::String,
+        }
+    }
+}
+
+impl From<i32> for MapKey {
+    fn from(i: i32) -> MapKey {
+        MapKey::Int32(i)
+    }
+}
+
+impl From<i64> for MapKey {
+    fn from(i: i64) -> MapKey {
+        MapKey::Int64(i)
+    }
+}
+
+impl From<Vec<u8>> for MapKey {
+    fn from(b: Vec<u8>) -> MapKey {
+        MapKey::Bytes(b)
+    }
+}
+
+impl From<String> for MapKey {
+    fn from(s: String) -> MapKey {
+        MapKey::String(s)
+    }
+}
+
+impl From<&str> for MapKey {
+    fn from(s: &str) -> MapKey {
+        MapKey::String(s.to_string())
+    }
 }
 
 impl TryFrom<Value> for MapKey {

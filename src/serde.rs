@@ -1,9 +1,11 @@
+use std::collections::HashMap;
+
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::{
     MAGIC, VERSION,
     error::ImprintError,
-    types::{DirectoryEntry, Flags, Header, ImprintRecord, SchemaId, TypeCode, Value},
+    types::{DirectoryEntry, Flags, Header, ImprintRecord, MapKey, SchemaId, TypeCode, Value},
     varint,
 };
 
@@ -81,7 +83,53 @@ impl Write for Value {
                 }
                 Ok(())
             }
+            Self::Map(m) => {
+                if m.is_empty() {
+                    return Err(ImprintError::SchemaError("empty map not allowed".into()));
+                }
+                let key_type_code = m.keys().next().unwrap().type_code();
+                let value_type_code = m.values().next().unwrap().type_code();
+                buf.put_u8(key_type_code as u8);
+                buf.put_u8(value_type_code as u8);
+                varint::encode(m.len() as u32, buf);
+                for (key, value) in m {
+                    if value.type_code() != value_type_code {
+                        return Err(ImprintError::SchemaError(
+                            "map values must have same type".into(),
+                        ));
+                    }
+                    key.write(buf)?;
+                    value.write(buf)?;
+                }
+                Ok(())
+            }
             Self::Row(v) => v.write(buf),
+        }
+    }
+}
+
+impl Write for MapKey {
+    fn write(&self, buf: &mut BytesMut) -> Result<(), ImprintError> {
+        match self {
+            MapKey::Int32(i) => {
+                buf.put_i32_le(*i);
+                Ok(())
+            }
+            MapKey::Int64(i) => {
+                buf.put_i64_le(*i);
+                Ok(())
+            }
+            MapKey::Bytes(b) => {
+                varint::encode(b.len() as u32, buf);
+                buf.put_slice(b);
+                Ok(())
+            }
+            MapKey::String(s) => {
+                let bytes = s.as_bytes();
+                varint::encode(bytes.len() as u32, buf);
+                buf.put_slice(bytes);
+                Ok(())
+            }
         }
     }
 }
@@ -201,6 +249,31 @@ impl ValueRead for Value {
                 }
                 values.into()
             }
+            TypeCode::Map => {
+                let key_type = TypeCode::try_from(bytes.get_u8())?;
+                bytes_read += 1;
+
+                let value_type = TypeCode::try_from(bytes.get_u8())?;
+                bytes_read += 1;
+
+                let (len, len_size) = varint::decode(bytes.clone())?;
+                bytes.advance(len_size);
+                bytes_read += len_size;
+
+                let mut map = HashMap::with_capacity(len as usize);
+                for _ in 0..len {
+                    let (key, key_size) = MapKey::read(key_type, bytes.clone())?;
+                    bytes.advance(key_size);
+                    bytes_read += key_size;
+
+                    let (value, value_size) = Self::read(value_type, bytes.clone())?;
+                    bytes.advance(value_size);
+                    bytes_read += value_size;
+
+                    map.insert(key, value);
+                }
+                map.into()
+            }
             TypeCode::Row => {
                 let (record, size) = ImprintRecord::read(bytes)?;
                 bytes_read += size;
@@ -208,6 +281,76 @@ impl ValueRead for Value {
             }
         };
         Ok((value, bytes_read))
+    }
+}
+
+impl ValueRead for MapKey {
+    fn read(type_code: TypeCode, mut bytes: Bytes) -> Result<(Self, usize), ImprintError> {
+        let mut bytes_read = 0;
+
+        let key_type = type_code;
+
+        let key = match key_type {
+            TypeCode::Int32 => {
+                if bytes.remaining() < 4 {
+                    return Err(ImprintError::BufferUnderflow {
+                        needed: 4,
+                        available: bytes.remaining(),
+                    });
+                }
+                let v = bytes.get_i32_le();
+                bytes_read += 4;
+                v.into()
+            }
+            TypeCode::Int64 => {
+                if bytes.remaining() < 8 {
+                    return Err(ImprintError::BufferUnderflow {
+                        needed: 8,
+                        available: bytes.remaining(),
+                    });
+                }
+                let v = bytes.get_i64_le();
+                bytes_read += 8;
+                v.into()
+            }
+            TypeCode::Bytes => {
+                let (len, len_size) = varint::decode(bytes.clone())?;
+                bytes.advance(len_size);
+                bytes_read += len_size;
+
+                if bytes.remaining() < len as usize {
+                    return Err(ImprintError::BufferUnderflow {
+                        needed: len as usize,
+                        available: bytes.remaining(),
+                    });
+                }
+                let mut v = vec![0; len as usize];
+                bytes.copy_to_slice(&mut v);
+                bytes_read += len as usize;
+                v.into()
+            }
+            TypeCode::String => {
+                let (len, len_size) = varint::decode(bytes.clone())?;
+                bytes.advance(len_size);
+                bytes_read += len_size;
+
+                if bytes.remaining() < len as usize {
+                    return Err(ImprintError::BufferUnderflow {
+                        needed: len as usize,
+                        available: bytes.remaining(),
+                    });
+                }
+                let mut v = vec![0; len as usize];
+                bytes.copy_to_slice(&mut v);
+                bytes_read += len as usize;
+                let s = String::from_utf8(v).map_err(|_| ImprintError::InvalidUtf8String)?;
+                s.into()
+            }
+            _ => {
+                return Err(ImprintError::SchemaError("invalid map key type".into()));
+            }
+        };
+        Ok((key, bytes_read))
     }
 }
 
