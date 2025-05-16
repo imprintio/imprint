@@ -5,13 +5,13 @@ members = [".", "benches"]
 name = "imprint"
 version = "0.1.0"
 edition = "2024"
-description = "A binary row serialization format for stream processing workloads"
+description = "A binary row serialization format for data pipelines"
 license = "MIT"
 
 [dependencies]
 thiserror = "1.0"
 anyhow = "1.0"
-bytes = "1.5"  # For efficient byte buffer handling
+bytes = "1.5"
 
 [dev-dependencies]
-proptest = "1.4"  # For property-based testing
+proptest = "1.4"

@@ -311,6 +311,7 @@ pub struct SchemaId {
 pub struct Header {
     pub flags: Flags,
     pub schema_id: SchemaId,
+    pub payload_size: u32,
 }
 
 /// An Imprint record containing a header, optional field directory, and payload
