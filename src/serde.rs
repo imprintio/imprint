@@ -454,6 +454,7 @@ mod tests {
         buf.put_u8(VERSION);
         buf.put_u8(0x00);
         buf.put_u64_le(0);
+        buf.put_u32_le(0);
 
         // When trying to read
         // Then it should return an invalid magic error
@@ -468,6 +469,7 @@ mod tests {
         buf.put_u8(0xFF); // Wrong version
         buf.put_u8(0x00);
         buf.put_u64_le(0);
+        buf.put_u32_le(0);
 
         // When trying to read
         // Then it should return an unsupported version error
