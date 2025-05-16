@@ -85,14 +85,15 @@ impl Write for Value {
                 Ok(())
             }
             Self::Map(m) => {
+                varint::encode(m.len() as u32, buf);
                 if m.is_empty() {
-                    return Err(ImprintError::SchemaError("empty map not allowed".into()));
+                    return Ok(());
                 }
+
                 let key_type_code = m.keys().next().unwrap().type_code();
                 let value_type_code = m.values().next().unwrap().type_code();
                 buf.put_u8(key_type_code as u8);
                 buf.put_u8(value_type_code as u8);
-                varint::encode(m.len() as u32, buf);
                 for (key, value) in m {
                     if key.type_code() != key_type_code {
                         return Err(ImprintError::SchemaError(
@@ -260,15 +261,19 @@ impl ValueRead for Value {
                 values.into()
             }
             TypeCode::Map => {
+                let (len, len_size) = varint::decode(bytes.clone())?;
+                bytes.advance(len_size);
+                bytes_read += len_size;
+
+                if len == 0 {
+                    return Ok((Value::Map(HashMap::new()), bytes_read));
+                }
+
                 let key_type = TypeCode::try_from(bytes.get_u8())?;
                 bytes_read += 1;
 
                 let value_type = TypeCode::try_from(bytes.get_u8())?;
                 bytes_read += 1;
-
-                let (len, len_size) = varint::decode(bytes.clone())?;
-                bytes.advance(len_size);
-                bytes_read += len_size;
 
                 let mut map = HashMap::with_capacity(len as usize);
                 for _ in 0..len {
@@ -511,7 +516,7 @@ mod tests {
         key_gen: BoxedStrategy<MapKey>,
         value_gen: BoxedStrategy<Value>,
     ) -> BoxedStrategy<Value> {
-        prop::collection::hash_map(key_gen, value_gen, 1..10)
+        prop::collection::hash_map(key_gen, value_gen, 0..10)
             .prop_map(Value::Map)
             .boxed()
     }
