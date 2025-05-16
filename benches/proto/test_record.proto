@@ -15,6 +15,14 @@ message Product {
     string sku = 10;
 }
 
+message SimpleProduct {
+    string id = 1;
+    string name = 2;
+    double price = 3;
+    string category = 4;
+    string brand = 5;
+}
+
 message Order {
     string id = 1;
     string customer_id = 2;
