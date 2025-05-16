@@ -3,7 +3,10 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use crate::{
     MAGIC, VERSION,
     error::ImprintError,
-    types::{DirectoryEntry, Flags, Header, ImprintRecord, SchemaId, TypeCode, Value},
+    types::{
+        ComplexValue, DirectoryEntry, Flags, Header, ImprintRecord, PrimitiveValue, SchemaId,
+        TypeCode, Value,
+    },
     varint,
 };
 
@@ -32,39 +35,39 @@ pub trait ValueRead: Sized {
 impl Write for Value {
     fn write(&self, buf: &mut BytesMut) -> Result<(), ImprintError> {
         match self {
-            Self::Null => Ok(()),
-            Self::Bool(v) => {
+            Self::Primitive(PrimitiveValue::Null) => Ok(()),
+            Self::Primitive(PrimitiveValue::Bool(v)) => {
                 buf.put_u8(if *v { 1 } else { 0 });
                 Ok(())
             }
-            Self::Int32(v) => {
+            Self::Primitive(PrimitiveValue::Int32(v)) => {
                 buf.put_i32_le(*v);
                 Ok(())
             }
-            Self::Int64(v) => {
+            Self::Primitive(PrimitiveValue::Int64(v)) => {
                 buf.put_i64_le(*v);
                 Ok(())
             }
-            Self::Float32(v) => {
+            Self::Primitive(PrimitiveValue::Float32(v)) => {
                 buf.put_f32_le(*v);
                 Ok(())
             }
-            Self::Float64(v) => {
+            Self::Primitive(PrimitiveValue::Float64(v)) => {
                 buf.put_f64_le(*v);
                 Ok(())
             }
-            Self::Bytes(v) => {
+            Self::Primitive(PrimitiveValue::Bytes(v)) => {
                 varint::encode(v.len() as u32, buf);
                 buf.put_slice(v);
                 Ok(())
             }
-            Self::String(v) => {
+            Self::Primitive(PrimitiveValue::String(v)) => {
                 let bytes = v.as_bytes();
                 varint::encode(bytes.len() as u32, buf);
                 buf.put_slice(bytes);
                 Ok(())
             }
-            Self::Array(v) => {
+            Self::Complex(ComplexValue::Array(v)) => {
                 if v.is_empty() {
                     return Err(ImprintError::SchemaError("empty array not allowed".into()));
                 }
@@ -81,7 +84,7 @@ impl Write for Value {
                 }
                 Ok(())
             }
-            Self::Row(v) => v.write(buf),
+            Self::Complex(ComplexValue::Row(v)) => v.write(buf),
         }
     }
 }
@@ -91,7 +94,7 @@ impl ValueRead for Value {
         let mut bytes_read = 0;
 
         let value = match type_code {
-            TypeCode::Null => Value::Null,
+            TypeCode::Null => Value::Primitive(PrimitiveValue::Null),
             TypeCode::Bool => {
                 if !bytes.has_remaining() {
                     return Err(ImprintError::BufferUnderflow {
@@ -102,8 +105,8 @@ impl ValueRead for Value {
                 let v = bytes.get_u8();
                 bytes_read += 1;
                 match v {
-                    0 => Value::Bool(false),
-                    1 => Value::Bool(true),
+                    0 => Value::Primitive(PrimitiveValue::Bool(false)),
+                    1 => Value::Primitive(PrimitiveValue::Bool(true)),
                     _ => return Err(ImprintError::SchemaError("invalid boolean value".into())),
                 }
             }
@@ -116,7 +119,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_i32_le();
                 bytes_read += 4;
-                Value::Int32(v)
+                Value::Primitive(PrimitiveValue::Int32(v))
             }
             TypeCode::Int64 => {
                 if bytes.remaining() < 8 {
@@ -127,7 +130,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_i64_le();
                 bytes_read += 8;
-                Value::Int64(v)
+                Value::Primitive(PrimitiveValue::Int64(v))
             }
             TypeCode::Float32 => {
                 if bytes.remaining() < 4 {
@@ -138,7 +141,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_f32_le();
                 bytes_read += 4;
-                Value::Float32(v)
+                Value::Primitive(PrimitiveValue::Float32(v))
             }
             TypeCode::Float64 => {
                 if bytes.remaining() < 8 {
@@ -149,7 +152,7 @@ impl ValueRead for Value {
                 }
                 let v = bytes.get_f64_le();
                 bytes_read += 8;
-                Value::Float64(v)
+                Value::Primitive(PrimitiveValue::Float64(v))
             }
             TypeCode::Bytes => {
                 let (len, len_size) = varint::decode(bytes.clone())?;
@@ -165,7 +168,7 @@ impl ValueRead for Value {
                 let mut v = vec![0; len as usize];
                 bytes.copy_to_slice(&mut v);
                 bytes_read += len as usize;
-                Value::Bytes(v)
+                Value::Primitive(PrimitiveValue::Bytes(v))
             }
             TypeCode::String => {
                 let (len, len_size) = varint::decode(bytes.clone())?;
@@ -182,7 +185,7 @@ impl ValueRead for Value {
                 bytes.copy_to_slice(&mut v);
                 bytes_read += len as usize;
                 let s = String::from_utf8(v).map_err(|_| ImprintError::InvalidUtf8String)?;
-                Value::String(s)
+                Value::Primitive(PrimitiveValue::String(s))
             }
             TypeCode::Array => {
                 let element_type = TypeCode::try_from(bytes.get_u8())?;
@@ -199,12 +202,12 @@ impl ValueRead for Value {
                     bytes_read += value_size;
                     values.push(value);
                 }
-                Value::Array(values)
+                Value::Complex(ComplexValue::Array(values))
             }
             TypeCode::Row => {
                 let (record, size) = ImprintRecord::read(bytes)?;
                 bytes_read += size;
-                Value::Row(Box::new(record))
+                Value::Complex(ComplexValue::Row(Box::new(record)))
             }
         };
         Ok((value, bytes_read))
@@ -387,14 +390,15 @@ mod tests {
     // Helper function to generate primitive Values
     fn arb_primitive_value() -> BoxedStrategy<Value> {
         prop_oneof![
-            Just(Value::Null),
-            any::<bool>().prop_map(Value::Bool),
-            any::<i32>().prop_map(Value::Int32),
-            any::<i64>().prop_map(Value::Int64),
-            any::<f32>().prop_map(Value::Float32),
-            any::<f64>().prop_map(Value::Float64),
-            prop::collection::vec(any::<u8>(), 0..100).prop_map(Value::Bytes),
-            ".*".prop_map(Value::String)
+            Just(Value::Primitive(PrimitiveValue::Null)),
+            any::<bool>().prop_map(|v| Value::Primitive(PrimitiveValue::Bool(v))),
+            any::<i32>().prop_map(|v| Value::Primitive(PrimitiveValue::Int32(v))),
+            any::<i64>().prop_map(|v| Value::Primitive(PrimitiveValue::Int64(v))),
+            any::<f32>().prop_map(|v| Value::Primitive(PrimitiveValue::Float32(v))),
+            any::<f64>().prop_map(|v| Value::Primitive(PrimitiveValue::Float64(v))),
+            prop::collection::vec(any::<u8>(), 0..100)
+                .prop_map(|v| Value::Primitive(PrimitiveValue::Bytes(v))),
+            ".*".prop_map(|v| Value::Primitive(PrimitiveValue::String(v)))
         ]
         .boxed()
     }
@@ -402,7 +406,7 @@ mod tests {
     // Helper function to generate homogeneous arrays of a specific type
     fn arb_homogeneous_array(element_gen: BoxedStrategy<Value>) -> BoxedStrategy<Value> {
         prop::collection::vec(element_gen, 1..100)
-            .prop_map(Value::Array)
+            .prop_map(|v| Value::Complex(ComplexValue::Array(v)))
             .boxed()
     }
 
@@ -457,9 +461,14 @@ mod tests {
             schema_hash: 0xcafebabe,
         })
         .unwrap();
-        inner_writer.add_field(1, Value::Int32(42)).unwrap();
         inner_writer
-            .add_field(2, Value::String("nested".to_string()))
+            .add_field(1, Value::Primitive(PrimitiveValue::Int32(42)))
+            .unwrap();
+        inner_writer
+            .add_field(
+                2,
+                Value::Primitive(PrimitiveValue::String("nested".to_string())),
+            )
             .unwrap();
         let inner_record = inner_writer.build().unwrap();
 
@@ -470,9 +479,11 @@ mod tests {
         })
         .unwrap();
         outer_writer
-            .add_field(1, Value::Row(Box::new(inner_record)))
+            .add_field(1, Value::Complex(ComplexValue::Row(Box::new(inner_record))))
             .unwrap();
-        outer_writer.add_field(2, Value::Int64(123)).unwrap();
+        outer_writer
+            .add_field(2, Value::Primitive(PrimitiveValue::Int64(123)))
+            .unwrap();
         let outer_record = outer_writer.build().unwrap();
 
         // When we serialize and deserialize the outer record
@@ -489,10 +500,10 @@ mod tests {
         // And the outer record values should match
         let got_row = deserialized_record.get_value(1).unwrap().unwrap();
         let got_int64 = deserialized_record.get_value(2).unwrap().unwrap();
-        assert_eq!(got_int64, Value::Int64(123));
+        assert_eq!(got_int64, Value::Primitive(PrimitiveValue::Int64(123)));
 
         // And the inner record should be preserved
-        if let Value::Row(inner) = got_row {
+        if let Value::Complex(ComplexValue::Row(inner)) = got_row {
             assert_eq!(inner.header.schema_id.fieldspace_id, 2);
             assert_eq!(inner.header.schema_id.schema_hash, 0xcafebabe);
             assert_eq!(inner.header.flags.0, Flags::FIELD_DIRECTORY);
@@ -501,8 +512,11 @@ mod tests {
             let got_inner_int = inner.get_value(1).unwrap().unwrap();
             let got_inner_str = inner.get_value(2).unwrap().unwrap();
 
-            assert_eq!(got_inner_int, Value::Int32(42));
-            assert_eq!(got_inner_str, Value::String("nested".to_string()));
+            assert_eq!(got_inner_int, Value::Primitive(PrimitiveValue::Int32(42)));
+            assert_eq!(
+                got_inner_str,
+                Value::Primitive(PrimitiveValue::String("nested".to_string()))
+            );
         } else {
             panic!("Expected Row value");
         }
@@ -511,14 +525,14 @@ mod tests {
     proptest! {
         #[test]
         fn test_roundtrip_simple_record(
-            null in Just(Value::Null),
-            boolean in any::<bool>().prop_map(Value::Bool),
-            int32 in any::<i32>().prop_map(Value::Int32),
-            int64 in any::<i64>().prop_map(Value::Int64),
-            float32 in any::<f32>().prop_map(Value::Float32),
-            float64 in any::<f64>().prop_map(Value::Float64),
-            bytes_val in prop::collection::vec(any::<u8>(), 1..100).prop_map(Value::Bytes),
-            string in any::<String>().prop_map(Value::String)
+            null in Just(Value::Primitive(PrimitiveValue::Null)),
+            boolean in any::<bool>().prop_map(|v| Value::Primitive(PrimitiveValue::Bool(v))),
+            int32 in any::<i32>().prop_map(|v| Value::Primitive(PrimitiveValue::Int32(v))),
+            int64 in any::<i64>().prop_map(|v| Value::Primitive(PrimitiveValue::Int64(v))),
+            float32 in any::<f32>().prop_map(|v| Value::Primitive(PrimitiveValue::Float32(v))),
+            float64 in any::<f64>().prop_map(|v| Value::Primitive(PrimitiveValue::Float64(v))),
+            bytes_val in prop::collection::vec(any::<u8>(), 1..100).prop_map(|v| Value::Primitive(PrimitiveValue::Bytes(v))),
+            string in any::<String>().prop_map(|v| Value::Primitive(PrimitiveValue::String(v)))
         ) {
             let mut writer = ImprintWriter::new(SchemaId {
                 fieldspace_id: 1,
@@ -581,19 +595,19 @@ mod tests {
 
         #[test]
         fn prop_roundtrip_arrays(base_value in arb_primitive_value()) {
-            // Skip arrays and rows as base types
-            prop_assume!(!matches!(base_value, Value::Array(_) | Value::Row(_)));
+            // Skip complex types
+            prop_assume!(!matches!(base_value, Value::Complex(_)));
 
             // Create a strategy for arrays of this type
             let array_strategy = match base_value {
-                Value::Null => Just(Value::Null).prop_map(|_| Value::Array(vec![Value::Null; 3])).boxed(),
-                Value::Bool(_) => arb_homogeneous_array(any::<bool>().prop_map(Value::Bool).boxed()),
-                Value::Int32(_) => arb_homogeneous_array(any::<i32>().prop_map(Value::Int32).boxed()),
-                Value::Int64(_) => arb_homogeneous_array(any::<i64>().prop_map(Value::Int64).boxed()),
-                Value::Float32(_) => arb_homogeneous_array(any::<f32>().prop_map(Value::Float32).boxed()),
-                Value::Float64(_) => arb_homogeneous_array(any::<f64>().prop_map(Value::Float64).boxed()),
-                Value::Bytes(_) => arb_homogeneous_array(prop::collection::vec(any::<u8>(), 0..100).prop_map(Value::Bytes).boxed()),
-                Value::String(_) => arb_homogeneous_array(".*".prop_map(Value::String).boxed()),
+                Value::Primitive(PrimitiveValue::Null) => Just(Value::Primitive(PrimitiveValue::Null)).prop_map(|_| Value::Complex(ComplexValue::Array(vec![Value::Primitive(PrimitiveValue::Null); 3]))).boxed(),
+                Value::Primitive(PrimitiveValue::Bool(_)) => arb_homogeneous_array(any::<bool>().prop_map(|v| v.into()).boxed()),
+                Value::Primitive(PrimitiveValue::Int32(_)) => arb_homogeneous_array(any::<i32>().prop_map(|v| v.into()).boxed()),
+                Value::Primitive(PrimitiveValue::Int64(_)) => arb_homogeneous_array(any::<i64>().prop_map(|v| v.into()).boxed()),
+                Value::Primitive(PrimitiveValue::Float32(_)) => arb_homogeneous_array(any::<f32>().prop_map(|v| v.into()).boxed()),
+                Value::Primitive(PrimitiveValue::Float64(_)) => arb_homogeneous_array(any::<f64>().prop_map(|v| v.into()).boxed()),
+                Value::Primitive(PrimitiveValue::Bytes(_)) => arb_homogeneous_array(prop::collection::vec(any::<u8>(), 0..100).prop_map(|v| v.into()).boxed()),
+                Value::Primitive(PrimitiveValue::String(_)) => arb_homogeneous_array(".*".prop_map(|v| v.into()).boxed()),
                 _ => panic!("Unsupported array type"),
             };
 
@@ -631,12 +645,12 @@ mod tests {
         .unwrap();
 
         // Add duplicate field IDs
-        writer.add_field(1, Value::Int32(42)).unwrap();
-        writer.add_field(1, Value::Int32(43)).unwrap();
+        writer.add_field(1, 42.into()).unwrap();
+        writer.add_field(1, 43.into()).unwrap();
 
         // Build should succeed, last value wins
         let record = writer.build().unwrap();
         assert_eq!(record.directory.len(), 1);
-        assert_eq!(record.get_value(1).unwrap(), Some(Value::Int32(43)));
+        assert_eq!(record.get_value(1).unwrap(), Some(43.into()));
     }
 }

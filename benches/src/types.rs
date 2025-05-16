@@ -1,4 +1,4 @@
-use imprint::{ImprintRecord, ImprintWriter, SchemaId, Value};
+use imprint::{ImprintRecord, ImprintWriter, SchemaId};
 
 include!(concat!(env!("OUT_DIR"), "/test.rs"));
 
@@ -10,33 +10,27 @@ impl Product {
         })
         .unwrap();
 
-        writer.add_field(1, Value::String(self.id.clone())).unwrap();
+        writer.add_field(1, self.id.clone().into()).unwrap();
+        writer.add_field(2, self.name.clone().into()).unwrap();
         writer
-            .add_field(2, Value::String(self.name.clone()))
+            .add_field(3, self.description.clone().into())
             .unwrap();
-        writer
-            .add_field(3, Value::String(self.description.clone()))
-            .unwrap();
-        writer.add_field(4, Value::Float64(self.price)).unwrap();
-        writer
-            .add_field(5, Value::Int32(self.stock_quantity))
-            .unwrap();
-        writer
-            .add_field(6, Value::String(self.category.clone()))
-            .unwrap();
-        writer
-            .add_field(7, Value::String(self.brand.clone()))
-            .unwrap();
+        writer.add_field(4, self.price.into()).unwrap();
+        writer.add_field(5, self.stock_quantity.into()).unwrap();
+        writer.add_field(6, self.category.clone().into()).unwrap();
+        writer.add_field(7, self.brand.clone().into()).unwrap();
         writer
             .add_field(
                 8,
-                Value::Array(self.tags.iter().map(|t| Value::String(t.clone())).collect()),
+                self.tags
+                    .iter()
+                    .map(|t| t.clone())
+                    .collect::<Vec<_>>()
+                    .into(),
             )
             .unwrap();
-        writer.add_field(9, Value::Bool(self.is_active)).unwrap();
-        writer
-            .add_field(10, Value::String(self.sku.clone()))
-            .unwrap();
+        writer.add_field(9, self.is_active.into()).unwrap();
+        writer.add_field(10, self.sku.clone().into()).unwrap();
 
         writer.build().unwrap()
     }
@@ -50,20 +44,22 @@ impl Order {
         })
         .unwrap();
 
+        writer.add_field(101, self.id.clone().into()).unwrap();
         writer
-            .add_field(101, Value::String(self.id.clone()))
+            .add_field(102, self.customer_id.clone().into())
             .unwrap();
         writer
-            .add_field(102, Value::String(self.customer_id.clone()))
+            .add_field(103, self.product_id.clone().into())
             .unwrap();
-        writer
-            .add_field(103, Value::String(self.product_id.clone()))
-            .unwrap();
-        writer.add_field(104, Value::Int32(self.quantity)).unwrap();
+        writer.add_field(104, self.quantity.into()).unwrap();
         writer
             .add_field(
                 105,
-                Value::Array(self.tags.iter().map(|t| Value::String(t.clone())).collect()),
+                self.tags
+                    .iter()
+                    .map(|t| t.clone())
+                    .collect::<Vec<_>>()
+                    .into(),
             )
             .unwrap();
 

@@ -71,9 +71,9 @@ impl TryFrom<u8> for TypeCode {
     }
 }
 
-/// A value that can be stored in an Imprint record
+/// All the atomic values we consider “primitive”
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value {
+pub enum PrimitiveValue {
     Null,
     Bool(bool),
     Int32(i32),
@@ -82,24 +82,106 @@ pub enum Value {
     Float64(f64),
     Bytes(Vec<u8>),
     String(String),
+}
+
+/// All the composite values that contain (and compose) other Values
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComplexValue {
     Array(Vec<Value>),
     Row(Box<ImprintRecord>),
+}
+
+/// The top-level Value type
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Primitive(PrimitiveValue),
+    Complex(ComplexValue),
 }
 
 impl Value {
     pub fn type_code(&self) -> TypeCode {
         match self {
-            Self::Null => TypeCode::Null,
-            Self::Bool(_) => TypeCode::Bool,
-            Self::Int32(_) => TypeCode::Int32,
-            Self::Int64(_) => TypeCode::Int64,
-            Self::Float32(_) => TypeCode::Float32,
-            Self::Float64(_) => TypeCode::Float64,
-            Self::Bytes(_) => TypeCode::Bytes,
-            Self::String(_) => TypeCode::String,
-            Self::Array(_) => TypeCode::Array,
-            Self::Row(_) => TypeCode::Row,
+            Self::Primitive(PrimitiveValue::Null) => TypeCode::Null,
+            Self::Primitive(PrimitiveValue::Bool(_)) => TypeCode::Bool,
+            Self::Primitive(PrimitiveValue::Int32(_)) => TypeCode::Int32,
+            Self::Primitive(PrimitiveValue::Int64(_)) => TypeCode::Int64,
+            Self::Primitive(PrimitiveValue::Float32(_)) => TypeCode::Float32,
+            Self::Primitive(PrimitiveValue::Float64(_)) => TypeCode::Float64,
+            Self::Primitive(PrimitiveValue::Bytes(_)) => TypeCode::Bytes,
+            Self::Primitive(PrimitiveValue::String(_)) => TypeCode::String,
+            Self::Complex(ComplexValue::Array(_)) => TypeCode::Array,
+            Self::Complex(ComplexValue::Row(_)) => TypeCode::Row,
         }
+    }
+
+    pub fn is_primitive(&self) -> bool {
+        matches!(self, Value::Primitive(_))
+    }
+    pub fn is_complex(&self) -> bool {
+        matches!(self, Value::Complex(_))
+    }
+}
+
+impl From<bool> for Value {
+    fn from(b: bool) -> Self {
+        Value::Primitive(PrimitiveValue::Bool(b))
+    }
+}
+
+impl From<i32> for Value {
+    fn from(i: i32) -> Self {
+        Value::Primitive(PrimitiveValue::Int32(i))
+    }
+}
+
+impl From<i64> for Value {
+    fn from(i: i64) -> Self {
+        Value::Primitive(PrimitiveValue::Int64(i))
+    }
+}
+
+impl From<f32> for Value {
+    fn from(f: f32) -> Self {
+        Value::Primitive(PrimitiveValue::Float32(f))
+    }
+}
+
+impl From<f64> for Value {
+    fn from(f: f64) -> Self {
+        Value::Primitive(PrimitiveValue::Float64(f))
+    }
+}
+
+impl From<Vec<u8>> for Value {
+    fn from(b: Vec<u8>) -> Self {
+        Value::Primitive(PrimitiveValue::Bytes(b))
+    }
+}
+
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        Value::Primitive(PrimitiveValue::String(s))
+    }
+}
+
+impl From<&str> for Value {
+    fn from(s: &str) -> Self {
+        Value::Primitive(PrimitiveValue::String(s.to_string()))
+    }
+}
+
+// Any collection of values that can be converted to an array
+impl<T: Into<Value>> From<Vec<T>> for Value {
+    fn from(v: Vec<T>) -> Self {
+        // Map each value to its Value::Primitive
+        let values = v.into_iter().map(|v| v.into()).collect();
+        Value::Complex(ComplexValue::Array(values))
+    }
+}
+
+impl From<Box<ImprintRecord>> for Value {
+    fn from(r: Box<ImprintRecord>) -> Self {
+        Value::Complex(ComplexValue::Row(r))
     }
 }
 
