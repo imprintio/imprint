@@ -93,6 +93,11 @@ impl Write for Value {
                 buf.put_u8(value_type_code as u8);
                 varint::encode(m.len() as u32, buf);
                 for (key, value) in m {
+                    if key.type_code() != key_type_code {
+                        return Err(ImprintError::SchemaError(
+                            "map keys must have same type".into(),
+                        ));
+                    }
                     if value.type_code() != value_type_code {
                         return Err(ImprintError::SchemaError(
                             "map values must have same type".into(),
