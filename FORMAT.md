@@ -57,6 +57,7 @@ Each directory entry (9 bytes):
 | `0x8`     | Array | Array of values |
 | `0x9`     | Map | Key-value mapping |
 | `0xA`     | Row | Nested Imprint record |
+| `0xB-0xFF` | Reserved | Future types |
 
 ## Type Serialization Formats
 
@@ -193,6 +194,8 @@ Examples:
 - 128: `10000000 00000001` (`0x80 0x01`)
 - 16,383: `11111111 01111111` (`0xFF 0x7F`)
 - 16,384: `10000000 10000000 00000001` (`0x80 0x80 0x01`)
+
+Also see [LEB128 encoding](https://en.wikipedia.org/wiki/LEB128) for more details.
 
 ## Complete Record Example
 
