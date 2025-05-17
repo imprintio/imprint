@@ -31,6 +31,7 @@ pub trait ValueRead: Sized {
     fn read(type_code: TypeCode, bytes: Bytes) -> Result<(Self, usize), ImprintError>;
 }
 
+#[doc = include_str!("../FORMAT.md")]
 impl Write for Value {
     fn write(&self, buf: &mut BytesMut) -> Result<(), ImprintError> {
         match self {

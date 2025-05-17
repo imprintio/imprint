@@ -76,6 +76,8 @@ composition operations.
 +-----------------------------------------------------+
 ```
 
+_See [FORMAT.md](FORMAT.md) for more details on the payload encoding._
+
 ### Header Format
 
 | Offset | Size | Field        | Notes                                               |
