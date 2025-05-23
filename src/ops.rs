@@ -105,74 +105,59 @@ impl Merge for ImprintRecord {
     ) -> Result<ImprintRecord, ImprintError> {
         // we just shrink the directory and payload to the exact size we need at the end of the
         // merge and allocate the largest possible sizes up front assuming that the records do
-        // not have significant overlaping fields
+        // not have significant overlapping fields
         let mut new_directory = Vec::with_capacity(self.directory.len() + other.directory.len());
         let mut new_payload = BytesMut::with_capacity(self.payload.len() + other.payload.len());
 
-        new_directory.extend_from_slice(&self.directory);
-        new_payload.extend_from_slice(&self.payload);
+        let mut self_idx = 0;
+        let mut other_idx = 0;
+        let base_offset = 0u32;
+        let mut current_offset = 0u32;
 
-        let base_offset = new_payload.len() as u32;
-
-        if options.filter_duplicate_payloads {
-            // If filtering duplicates, we need to process each field individually
-            let mut current_offset = 0u32;
-            let mut self_idx = 0;
-
-            for entry in &other.directory {
-                // Skip fields that exist in the first record by advancing the pointer
-                while self_idx < self.directory.len() && self.directory[self_idx].id < entry.id {
-                    self_idx += 1;
+        while self_idx < self.directory.len() || other_idx < other.directory.len() {
+            let current_entry;
+            let current_payload;
+            let mut duplicate_payload = None;
+            if self_idx < self.directory.len() &&
+                (other_idx >= other.directory.len() ||
+                    self.directory[self_idx].id <= other.directory[other_idx].id)
+            {
+                current_entry = &self.directory[self_idx];
+                if other_idx < other.directory.len() &&
+                    self.directory[self_idx].id == other.directory[other_idx].id {
+                    if !options.filter_duplicate_payloads {
+                        duplicate_payload = Some(other.get_raw_bytes(other.directory[other_idx].id).unwrap());
+                    }
+                    other_idx += 1;
                 }
+                current_payload = self.get_raw_bytes(current_entry.id).unwrap();
+                self_idx += 1;
+            } else {
+                current_entry = &other.directory[other_idx];
+                current_payload = other.get_raw_bytes(current_entry.id).unwrap();
+                other_idx += 1;
+            };
 
-                // If we found a match, skip this field
-                if self_idx < self.directory.len() && self.directory[self_idx].id == entry.id {
-                    continue;
-                }
+            // Add adjusted directory entry
+            let new_entry = DirectoryEntry {
+                id: current_entry.id,
+                type_code: current_entry.type_code,
+                offset: base_offset + current_offset,
+            };
+            new_directory.push(new_entry);
 
-                let field_bytes = other.get_raw_bytes(entry.id).unwrap();
-
-                // Add adjusted directory entry
-                let new_entry = DirectoryEntry {
-                    id: entry.id,
-                    type_code: entry.type_code,
-                    offset: base_offset + current_offset,
-                };
-                new_directory.push(new_entry);
-
-                // Copy corresponding payload
-                new_payload.extend_from_slice(field_bytes.as_ref());
-                current_offset += field_bytes.len() as u32;
+            // Copy corresponding payload
+            let mut offset_delta = current_payload.len() as u32;
+            new_payload.extend_from_slice(current_payload.as_ref());
+            match duplicate_payload {
+                Some(payload) => {
+                    new_payload.extend_from_slice(payload.as_ref());
+                    offset_delta += payload.len() as u32;
+                },
+                None => {},
             }
-        } else {
-            // If not filtering duplicates, we can just append the entire payload
-            new_payload.extend_from_slice(&other.payload);
-
-            // Add all non-duplicate directory entries with adjusted offsets
-            let mut self_idx = 0;
-            for entry in &other.directory {
-                // Skip fields that exist in the first record by advancing the pointer -- don't
-                // use a set here since the performance degradation is significant
-                while self_idx < self.directory.len() && self.directory[self_idx].id < entry.id {
-                    self_idx += 1;
-                }
-
-                // If we found a match, skip this field
-                if self_idx < self.directory.len() && self.directory[self_idx].id == entry.id {
-                    continue;
-                }
-
-                let new_entry = DirectoryEntry {
-                    id: entry.id,
-                    type_code: entry.type_code,
-                    offset: base_offset + entry.offset,
-                };
-                new_directory.push(new_entry);
-            }
+            current_offset += offset_delta;
         }
-
-        // Sort directory by field ID to maintain canonical form
-        new_directory.sort_by_key(|e| e.id);
 
         // Shrink allocations to fit actual data
         new_directory.shrink_to_fit();
@@ -191,6 +176,7 @@ impl Merge for ImprintRecord {
 
 #[cfg(test)]
 mod tests {
+    use proptest::bits::BitSetLike;
     use super::*;
     use crate::ImprintWriter;
 
@@ -433,48 +419,91 @@ mod tests {
         assert_eq!(merged.get_value(2).unwrap(), Some(true.into()));
         assert_eq!(merged.get_value(3).unwrap(), Some("hello".into()));
         assert_eq!(merged.get_value(4).unwrap(), Some(123i64.into()));
+        let mut start = 0;
+        let mut end = start + 42.len() / 8;
+        assert_eq!(&merged.payload.slice(start..end)[..], 42u32.to_le_bytes());
+        start = end;
+        end = start + 1;
+        assert_eq!(&merged.payload.slice(start..end)[..], 1u8.to_le_bytes());
+        start = end + 1;  // + 1 is encoded length of the string
+        end = start + "hello".len();
+        assert_eq!(&merged.payload.slice(start..end)[..], "hello".as_bytes());
+        start = end;
+        end = start + 123i64.len() / 8;
+        assert_eq!(&merged.payload.slice(start..end)[..], 123i64.to_le_bytes());
     }
 
     #[test]
-    fn should_handle_duplicate_fields_keeping_first() {
-        // Given two records with overlapping fields
-        let mut writer1 = ImprintWriter::new(SchemaId {
-            fieldspace_id: 1,
-            schema_hash: 0xdeadbeef,
-        })
-        .unwrap();
-        writer1.add_field(1, 42.into()).unwrap();
-        writer1.add_field(2, "first".into()).unwrap();
-        let record1 = writer1.build().unwrap();
-
-        let mut writer2 = ImprintWriter::new(SchemaId {
-            fieldspace_id: 1,
-            schema_hash: 0xcafebabe,
-        })
-        .unwrap();
-        writer2.add_field(2, "second".into()).unwrap();
-        writer2.add_field(3, true.into()).unwrap();
-        let record2 = writer2.build().unwrap();
+    fn should_merge_records_with_overlapping_fields_keeping_all_payloads() {
+        let (record1, record2) = create_overlapping_records();
 
         // When merging with default options (keep zombie data)
         let merged = record1.merge(&record2).unwrap();
 
         // Then first occurrence of duplicate fields should be kept
         assert_eq!(merged.directory.len(), 3);
-        assert_eq!(merged.get_value(1).unwrap(), Some(42.into()));
+        assert_eq!(merged.get_value(1).unwrap(), Some(true.into()));
         assert_eq!(merged.get_value(2).unwrap(), Some("first".into()));
-        assert_eq!(merged.get_value(3).unwrap(), Some(true.into()));
+        assert_eq!(merged.get_value(3).unwrap(), Some(42.into()));
+        let mut start = 0;
+        let mut end = 1;
+        assert_eq!(&merged.payload.slice(start..end)[..], 1u8.to_le_bytes());
+        start = end + 1;  // + 1 is encoded length of the string
+        end = start + "first".len();
+        assert_eq!(&merged.payload.slice(start..end)[..], "first".as_bytes());
+        start = end + 1;  // + 1 is encoded length of the string
+        end = start + "second".len();
+        assert_eq!(&merged.payload.slice(start..end)[..], "second".as_bytes());
+        start = end;
+        end = start + 42.len() / 8;
+        assert_eq!(&merged.payload.slice(start..end)[..], 42u32.to_le_bytes());
+    }
 
-        // And payload should be larger due to zombie data
-        let filtered_merged = record1
-            .merge_with_opts(
-                &record2,
-                MergeOptions {
-                    filter_duplicate_payloads: true,
-                },
-            )
-            .unwrap();
-        assert!(merged.payload.len() > filtered_merged.payload.len());
+    #[test]
+    fn should_merge_records_with_overlapping_fields_filtering_overlapping_payloads() {
+        let (record1, record2) = create_overlapping_records();
+
+        // When merging with default options (keep zombie data)
+        let merged = record1.merge_with_opts(
+            &record2,
+            MergeOptions {
+                filter_duplicate_payloads: true,
+            },
+        ).unwrap();
+
+        // Then first occurrence of duplicate fields should be kept
+        assert_eq!(merged.directory.len(), 3);
+        assert_eq!(merged.get_value(1).unwrap(), Some(true.into()));
+        assert_eq!(merged.get_value(2).unwrap(), Some("first".into()));
+        assert_eq!(merged.get_value(3).unwrap(), Some(42.into()));
+        let mut start = 0;
+        let mut end = 1;
+        assert_eq!(&merged.payload.slice(start..end)[..], 1u8.to_le_bytes());
+        start = end + 1;  // + 1 is encoded length of the string
+        end = start + "first".len();
+        assert_eq!(&merged.payload.slice(start..end)[..], "first".as_bytes());
+        start = end;
+        end = start + 42.len() / 8;
+        assert_eq!(&merged.payload.slice(start..end)[..], 42u32.to_le_bytes());
+    }
+
+    fn create_overlapping_records() -> (ImprintRecord, ImprintRecord) {
+        // Given two records with overlapping fields
+        let mut writer1 = ImprintWriter::new(SchemaId {
+            fieldspace_id: 1,
+            schema_hash: 0xdeadbeef,
+        }).unwrap();
+        writer1.add_field(2, "first".into()).unwrap();
+        writer1.add_field(3, 42.into()).unwrap();
+
+        let mut writer2 = ImprintWriter::new(SchemaId {
+            fieldspace_id: 1,
+            schema_hash: 0xcafebabe,
+        }).unwrap();
+        writer2.add_field(1, true.into()).unwrap();
+        writer2.add_field(2, "second".into()).unwrap();
+
+        (writer1.build().unwrap(), writer2.build().unwrap())
     }
 
     #[test]

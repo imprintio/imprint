@@ -10,8 +10,8 @@ license = "MIT"
 
 [dependencies]
 thiserror = "1.0"
-anyhow = "1.0"
 bytes = "1.5"
+prost-build = "0.13.5"
 
 [dev-dependencies]
 proptest = "1.4"
